@@ -255,7 +255,8 @@ export async function GET(request: Request) {
                     isFavorite: v.channel.isFavorite,
                     avgViews: stats.mean,
                     stdDev: stats.stdDev
-                }
+                },
+                localPath: v.localPath // Expose local path for frontend
             };
         });
 

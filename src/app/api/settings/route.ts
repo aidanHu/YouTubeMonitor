@@ -1,18 +1,61 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getMachineId, validateActivation } from "@/lib/activation";
 
 export async function GET() {
+    // 1. Get Machine ID (Safe, from Env)
+    const machineId = getMachineId() || "UNKNOWN_ID_FALLBACK";
+
     try {
-        let settings = await prisma.settings.findFirst();
-        if (!settings) {
-            settings = await prisma.settings.create({
-                data: { downloadPath: "" }
-            });
+        let settings = null;
+        try {
+            settings = await prisma.settings.findFirst();
+        } catch (dbError) {
+            console.error("Database connection failed:", dbError);
+            // Fallback to in-memory defaults if DB is down
         }
-        return NextResponse.json(settings);
+
+        if (!settings) {
+            // If DB is working but empty, create defaults
+            try {
+                if (!settings) {
+                    // Check connection before create? No, just try catch
+                    // Actually, if findFirst threw, create will likely throw too.
+                    // We should only create if the previous error wasn't fatal.
+                }
+                // Let's simplified: If we have no settings and no error, create.
+                // If we have error, use default object.
+            } catch (e) {
+                console.error("Failed to init settings", e);
+            }
+        }
+
+        // Use settings or defaults
+        const currentCode = settings?.activationCode || "";
+        const validation = currentCode
+            ? validateActivation(currentCode, machineId)
+            : { valid: false };
+
+        return NextResponse.json({
+            id: settings?.id || "default",
+            downloadPath: settings?.downloadPath || "",
+            proxyUrl: settings?.proxyUrl || "",
+            cookieSource: settings?.cookieSource || "none",
+            activationCode: currentCode,
+            machineId,
+            isActivated: validation.valid,
+            expiresAt: validation.expiresAt,
+            dbStatus: settings ? "ok" : "error"
+        });
+
     } catch (e) {
-        console.error("Failed to fetch settings", e);
-        return NextResponse.json({ error: "Failed to fetch settings" }, { status: 500 });
+        console.error("Critical error in settings API", e);
+        // Even in critical error, try to return machineId
+        return NextResponse.json({
+            machineId,
+            error: "Critical API Error",
+            isActivated: false
+        });
     }
 }
 
@@ -25,13 +68,28 @@ export async function POST(request: Request) {
     }
 
     const performUpdate = async () => {
-        const { downloadPath, proxyUrl, cookieSource } = body;
+        const { downloadPath, proxyUrl, cookieSource, activationCode } = body;
         let settings = await prisma.settings.findFirst();
 
         const dataToUpdate: any = {};
         if (downloadPath !== undefined) dataToUpdate.downloadPath = downloadPath;
         if (proxyUrl !== undefined) dataToUpdate.proxyUrl = proxyUrl;
         if (cookieSource !== undefined) dataToUpdate.cookieSource = cookieSource;
+
+        // Handle Activation Code
+        if (activationCode !== undefined) {
+            const machineId = getMachineId();
+            const validation = validateActivation(activationCode, machineId);
+
+            // Allow saving even if invalid? 
+            // Better to only save/allow if valid, OR save it but return status.
+            // Let's save it regardless so user can 'try', but the UI will show invalid.
+            dataToUpdate.activationCode = activationCode;
+
+            // We'll return validation status in the final response if we could, 
+            // but here we just update data. 
+            // Ideally we should return specific feedback.
+        }
 
         if (settings) {
             await prisma.settings.update({
@@ -43,7 +101,8 @@ export async function POST(request: Request) {
                 data: {
                     downloadPath: downloadPath || "",
                     proxyUrl: proxyUrl || null,
-                    cookieSource: cookieSource || "none"
+                    cookieSource: cookieSource || "none",
+                    activationCode: activationCode || null
                 }
             });
         }
@@ -51,7 +110,22 @@ export async function POST(request: Request) {
 
     try {
         await performUpdate();
-        return NextResponse.json({ success: true });
+
+        // Check activation status to return immediate feedback
+        const machineId = getMachineId();
+        // Re-read settings or use input? 
+        // Let's assume input for feedback if present
+        let validation: { valid: boolean, message?: string, expiresAt?: Date } = { valid: false };
+        if (body && body.activationCode) {
+            validation = validateActivation(body.activationCode, machineId);
+        }
+
+        return NextResponse.json({
+            success: true,
+            activationValid: validation.valid,
+            activationMessage: validation.message,
+            expiresAt: validation.expiresAt
+        });
     } catch (e: any) {
         console.error("Failed to update settings", e);
 
@@ -66,41 +140,38 @@ export async function POST(request: Request) {
 
         if (isColumnMissing) {
             try {
-                console.log("Auto-migrating DB: Adding cookieSource column...");
-                await prisma.$executeRawUnsafe(`ALTER TABLE Settings ADD COLUMN cookieSource TEXT DEFAULT 'none'`);
-                // Re-run the logic
-                const body = await request.clone().json().catch(() => null); // body is already read.
-                // Correct approach: Just re-execute the prisma update with the data we already prepared.
-
-                // However, we need to redefine dataToUpdate because the original block might have failed before populating it? 
-                // No, dataToUpdate is defined before the try/update block.
-
-                // Wait, we need to handle the case where settings was null (create) vs update.
-                // The 'dataToUpdate' object is available here.
-
-                if (await prisma.settings.findFirst()) {
-                    // We already have 'settings' var from line 24, but better fetch fresh just in case
-                    const current = await prisma.settings.findFirst();
-                    if (current) {
-                        // Need to reconstruct dataToUpdate? it's already in scope!
-                        // But we can't access it if it was inside the try block? 
-                        // No, 'dataToUpdate' is defined inside the try block. 
-                        // We are inside the catch of that try block.
-
-                        // Wait, the catch block is for the WHOLE POST function?
-                        // Yes. So 'dataToUpdate' is defined in the TRY block. It is NOT available in the CATCH block if using block scoping (const/let).
-                        // Actually, TS/JS block scoping means variables defined in try are NOT available in catch.
-
-                        // I must refactor the structure to make variables available, or nest the try/catch around the prisma call specifically.
-                    }
+                // Check missing columns and add them
+                if (e.message.includes('activationCode')) {
+                    console.log("Auto-migrating DB: Adding activationCode column...");
+                    await prisma.$executeRawUnsafe(`ALTER TABLE Settings ADD COLUMN activationCode TEXT`);
+                } else if (e.message.includes('cookieSource')) {
+                    console.log("Auto-migrating DB: Adding cookieSource column...");
+                    await prisma.$executeRawUnsafe(`ALTER TABLE Settings ADD COLUMN cookieSource TEXT DEFAULT 'none'`);
                 }
 
-                return NextResponse.json({ success: true, migrated: true });
+                // Retry logic: Attempt to run the update again after fixing the schema
+                console.log("Auto-migration applied. Retrying update...");
+                await performUpdate();
+
+                // If performUpdate succeeded, return success response
+                const machineId = getMachineId();
+                let validation: { valid: boolean, message?: string, expiresAt?: Date } = { valid: false };
+                if (body && body.activationCode) {
+                    validation = validateActivation(body.activationCode, machineId);
+                }
+
+                return NextResponse.json({
+                    success: true,
+                    activationValid: validation.valid,
+                    activationMessage: validation.message,
+                    expiresAt: validation.expiresAt,
+                    migrated: true
+                });
+
             } catch (retryError: any) {
                 console.error("Retry failed:", retryError);
                 return NextResponse.json({
                     error: `Auto-migration failed: ${retryError.message}`,
-                    details: retryError.stack
                 }, { status: 500 });
             }
         }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { X, Folder, Save, Key, Trash2, Plus, Check, Info, RefreshCw, Database, Upload, Download as DownloadIcon, Globe, FolderInput } from "lucide-react";
+import { X, Folder, Save, Key, Trash2, Plus, Check, Info, RefreshCw, Database, Upload, Download as DownloadIcon, Globe, FolderInput, Copy, Lock } from "lucide-react";
+import { useData } from "@/context/DataContext";
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -15,12 +16,33 @@ interface ApiKey {
     lastUsed: string;
 }
 
+import { useDownloads } from "@/context/DownloadContext";
+
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-    const [activeTab, setActiveTab] = useState<"general" | "keys" | "data">("general");
+    const { refreshData } = useData();
+    const { restoreHistory } = useDownloads();
+
+    // Tabs configuration
+    const tabs = [
+        { id: "general", label: "常规设置", icon: Globe },
+        { id: "keys", label: "API Key 管理", icon: Key },
+        { id: "data", label: "数据管理", icon: Database },
+        { id: "activation", label: "软件激活", icon: Check }
+    ] as const;
+
+    const [activeTab, setActiveTab] = useState<"general" | "keys" | "data" | "activation">("general");
     const [downloadPath, setDownloadPath] = useState("");
     const [proxyUrl, setProxyUrl] = useState("");
     const [cookieSource, setCookieSource] = useState("none");
     const [showCookieInput, setShowCookieInput] = useState(false);
+
+    const [isMachineIdCopied, setIsMachineIdCopied] = useState(false);
+
+    // Activation State
+    const [activationCode, setActivationCode] = useState("");
+    const [machineId, setMachineId] = useState("loading...");
+    const [isActivated, setIsActivated] = useState(false);
+    const [expiresAt, setExpiresAt] = useState<string | null>(null);
 
     // API Key State
     const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
@@ -44,6 +66,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         try {
             const res = await fetch("/api/settings");
             const data = await res.json();
+
+            // Handle Machine ID and potentially errors
+            if (data.error) {
+                setMachineId(data.machineId || "API Error");
+            } else if (data.machineId) {
+                setMachineId(data.machineId);
+            }
+
             if (data.downloadPath) {
                 setDownloadPath(data.downloadPath);
             }
@@ -57,8 +87,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     setShowCookieInput(true);
                 }
             }
+            if (data.activationCode) setActivationCode(data.activationCode);
+            setIsActivated(!!data.isActivated);
+            setExpiresAt(data.expiresAt || null);
         } catch (e) {
             console.error("Failed to load settings", e);
+            setMachineId("Network Error");
         } finally {
             setLoading(false);
         }
@@ -82,14 +116,33 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         try {
             const res = await fetch("/api/settings", {
                 method: "POST",
-                body: JSON.stringify({ downloadPath, proxyUrl, cookieSource }),
+                body: JSON.stringify({ downloadPath, proxyUrl, cookieSource, activationCode }),
             });
             const data = await res.json();
 
             if (!res.ok) {
                 throw new Error(data.error || data.details || "Unknown error");
             }
-            alert("设置已保存");
+
+            // Handle Activation Feedback
+            if (activationCode && data.activationValid !== undefined) {
+                if (data.activationValid) {
+                    setIsActivated(true);
+                    if (data.expiresAt) setExpiresAt(data.expiresAt);
+                    alert(`激活成功！\n\n有效期至: ${new Date(data.expiresAt).toLocaleDateString()}`);
+                } else {
+                    setIsActivated(false);
+                    setExpiresAt(null);
+                    alert(`激活失败: ${data.activationMessage || "激活码无效或已过期"}`);
+                }
+            } else {
+                alert("设置已保存");
+            }
+
+            // Refresh settings in BG to sync state fully
+            fetchSettings();
+            // Sync global context
+            refreshData();
         } catch (e: any) {
             alert("保存失败: " + e.message);
         } finally {
@@ -223,6 +276,35 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         }
     };
 
+    // Force activation tab if not activated
+    useEffect(() => {
+        if (isOpen && !isActivated && activeTab !== "activation") {
+            setActiveTab("activation");
+        }
+    }, [isOpen, isActivated]);
+
+    const handleClearData = async () => {
+        if (!confirm("警告：此操作将清空所有视频、频道和分组数据！\n\n您的设置和激活状态将保留。\n此操作不可撤销，确定要继续吗？")) return;
+        if (!confirm("再次确认：真的要清空所有数据吗？")) return;
+
+        setLoading(true);
+        try {
+            const res = await fetch("/api/settings/data", { method: "DELETE" });
+            const data = await res.json();
+
+            if (res.ok) {
+                alert("数据已清空。应用将重新加载。");
+                window.location.reload();
+            } else {
+                throw new Error(data.error);
+            }
+        } catch (e: any) {
+            alert("清空数据失败: " + e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -235,35 +317,32 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     </button>
                 </div>
 
-                <div className="flex border-b border-zinc-100 dark:border-zinc-800 px-6 shrink-0">
-                    <button
-                        onClick={() => setActiveTab("general")}
-                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "general"
-                            ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
-                            : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                            }`}
-                    >
-                        常规设置
-                    </button>
-                    <button
-                        onClick={() => setActiveTab("keys")}
-                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "keys"
-                            ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
-                            : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                            }`}
-                    >
-                        API Key 管理
-                    </button>
-                    <button
-                        onClick={() => setActiveTab("data")}
-                        className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeTab === "data"
-                            ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
-                            : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                            }`}
-                    >
-                        数据管理
-                    </button>
+                <div className="flex border-b border-zinc-100 dark:border-zinc-800 px-6 shrink-0 space-x-2">
+                    {tabs.map(tab => {
+                        const Icon = tab.icon;
+                        const isActive = activeTab === tab.id;
+                        const isDisabled = !isActivated && tab.id !== "activation";
+
+                        return (
+                            <button
+                                key={tab.id}
+                                onClick={() => !isDisabled && setActiveTab(tab.id)}
+                                disabled={isDisabled}
+                                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${isActive
+                                    ? "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400"
+                                    : isDisabled
+                                        ? "border-transparent text-zinc-300 cursor-not-allowed"
+                                        : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                                    }`}
+                            >
+                                <Icon size={16} />
+                                {tab.label}
+                                {isDisabled && <Lock size={12} className="opacity-50" />}
+                            </button>
+                        );
+                    })}
                 </div>
+
 
                 <div className="p-6 overflow-y-auto flex-1">
                     {activeTab === "general" && (
@@ -354,20 +433,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             </div>
 
                             {/* yt-dlp Guide */}
+                            {/* yt-dlp Configuration - Hidden as it is now packaged */}
+                            {/* 
                             <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl text-sm text-blue-800 dark:text-blue-200 space-y-2">
                                 <h3 className="font-bold flex items-center gap-2">
                                     <Info size={16} />
-                                    yt-dlp 配置指南
+                                    Internal Components
                                 </h3>
-                                <p>为了使用下载功能，您需要在电脑上安装开源工具 <code>yt-dlp</code>。</p>
-                                <div className="bg-white/50 dark:bg-black/20 p-3 rounded-lg font-mono text-xs overflow-x-auto">
-                                    <p className="mb-2 text-zinc-500">//主要通过 Homebrew 安装 (Mac):</p>
-                                    <p className="select-all">brew install yt-dlp</p>
-                                    <p className="mt-2 mb-2 text-zinc-500">// 或者使用 pip:</p>
-                                    <p className="select-all">python3 -m pip install -U yt-dlp</p>
-                                </div>
-                                <p className="text-xs opacity-80">安装完成后，请重启本应用以确保环境变量生效。</p>
-                            </div>
+                                <p className="text-xs opacity-80">System dependencies are packaged internally.</p>
+                            </div> 
+                            */}
 
                             <div className="flex justify-end pt-4">
                                 <button
@@ -526,6 +601,42 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 </div>
                             </div>
 
+                            {/* History Restoration */}
+                            <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl space-y-3 bg-white dark:bg-zinc-900">
+                                <div className="flex items-center gap-3 text-zinc-900 dark:text-zinc-100 font-medium">
+                                    <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 rounded-lg">
+                                        <RefreshCw size={20} />
+                                    </div>
+                                    恢复下载记录
+                                </div>
+                                <p className="text-xs text-zinc-500">
+                                    即使清空了下载列表，只要数据库里有记录，就可以从数据库中重新加载已下载视频到下载管理列表。
+                                </p>
+                                <button
+                                    onClick={async () => {
+                                        setLoading(true);
+                                        try {
+                                            const res = await fetch("/api/downloads/restore");
+                                            if (res.ok) {
+                                                const items = await res.json();
+                                                restoreHistory(items);
+                                                alert(`成功恢复 ${items.length} 条下载记录！`);
+                                            } else {
+                                                throw new Error("API Error");
+                                            }
+                                        } catch (e) {
+                                            alert("恢复失败，请重试");
+                                        } finally {
+                                            setLoading(false);
+                                        }
+                                    }}
+                                    disabled={loading}
+                                    className="w-full py-2 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-lg text-sm font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                                >
+                                    {loading ? "扫描中..." : "扫描并恢复下载记录"}
+                                </button>
+                            </div>
+
                             {/* Migration */}
                             <div className="p-4 border border-zinc-200 dark:border-zinc-800 rounded-xl space-y-3 bg-white dark:bg-zinc-900">
                                 <div className="flex items-center gap-3 text-zinc-900 dark:text-zinc-100 font-medium">
@@ -545,11 +656,100 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                     {migrating ? "正在整理..." : "格式化下载路径 & 归档文件"}
                                 </button>
                             </div>
+
+                            {/* Danger Zone */}
+                            <div className="p-4 border border-red-200 dark:border-red-900/50 rounded-xl space-y-3 bg-red-50 dark:bg-red-900/10">
+                                <div className="flex items-center gap-3 text-red-700 dark:text-red-400 font-medium">
+                                    <div className="p-2 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-lg">
+                                        <Trash2 size={20} />
+                                    </div>
+                                    危险区域
+                                </div>
+                                <p className="text-xs text-red-600/80 dark:text-red-400/80">
+                                    清空所有已抓取的视频、频道和分组数据。<br />
+                                    (您的设置、API Key 和激活状态将保留)
+                                </p>
+                                <button
+                                    onClick={handleClearData}
+                                    disabled={loading}
+                                    className="w-full py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors disabled:opacity-50"
+                                >
+                                    {loading ? "处理中..." : "清空所有历史数据"}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === "activation" && (
+                        <div className="space-y-6">
+                            {/* Activation Settings */}
+                            <div className={`p-4 rounded-xl border ${isActivated ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-900' : 'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-900'} space-y-4`}>
+                                <div className="flex items-center justify-between">
+                                    <h3 className={`font-bold flex items-center gap-2 ${isActivated ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                                        <Key size={18} />
+                                        {isActivated ? "系统已激活" : "系统未激活"}
+                                    </h3>
+                                    <div className="text-right">
+                                        {isActivated && <Check size={20} className="text-green-600 dark:text-green-400 inline-block" />}
+                                        {isActivated && expiresAt && (
+                                            <p className="text-xs text-green-600 dark:text-green-500 font-mono mt-1">
+                                                有效期至: {new Date(expiresAt).toLocaleDateString()}
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">机器码 (Machine ID)</label>
+                                    <div className="flex gap-2">
+                                        <code className="flex-1 bg-white dark:bg-zinc-900 px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 font-mono text-sm break-all">
+                                            {machineId}
+                                        </code>
+                                        <button
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(machineId);
+                                                setIsMachineIdCopied(true);
+                                                setTimeout(() => setIsMachineIdCopied(false), 2000);
+                                            }}
+                                            className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 ${isMachineIdCopied
+                                                ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                                                : "bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600"
+                                                }`}
+                                        >
+                                            {isMachineIdCopied ? <Check size={14} /> : <Copy size={14} />}
+                                            {isMachineIdCopied ? "已复制" : "复制"}
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-zinc-500">
+                                        请将此机器码发送给管理员以获取激活码。
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">激活码 (Activation Code)</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={activationCode}
+                                            onChange={(e) => setActivationCode(e.target.value)}
+                                            placeholder="XXXXXX-XXXXXX-XXXXXX-XXXXXX"
+                                            className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 font-mono text-sm focus:ring-2 focus:ring-blue-500 outline-none uppercase"
+                                        />
+                                        <button
+                                            onClick={handleSaveSettings}
+                                            disabled={saving}
+                                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold transition-colors disabled:opacity-50 whitespace-nowrap"
+                                        >
+                                            {saving ? "激活中..." : "立刻激活"}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
-            </div>
-        </div>
+            </div >
+        </div >
     );
 }
 

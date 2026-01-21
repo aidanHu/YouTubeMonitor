@@ -1,8 +1,33 @@
 const { app, BrowserWindow, screen } = require("electron");
 const path = require("path");
 const fs = require('fs');
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
 const http = require("http");
+
+// --- MACHINE ID CALCULATION START ---
+function getMachineId() {
+    try {
+        const plat = process.platform;
+        if (plat === 'darwin') {
+            const output = execSync('ioreg -rd1 -c IOPlatformExpertDevice', { encoding: 'utf8' });
+            const match = output.match(/"IOPlatformUUID" = "(.+)"/);
+            return match ? match[1] : 'UNKNOWN_MAC_ID';
+        } else if (plat === 'win32') {
+            const output = execSync('REG QUERY HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid', { encoding: 'utf8' });
+            const match = output.match(/REG_SZ\s+(.*)/);
+            return match ? match[1].trim() : 'UNKNOWN_WIN_ID';
+        }
+        return 'UNKNOWN_PLATFORM_ID';
+    } catch (e) {
+        console.error("Failed to get machine ID in Main:", e.message);
+        return 'UNKNOWN_M_ID_ERROR';
+    }
+}
+
+// Calculate and set globally before any child process is spawned
+process.env.MACHINE_ID = getMachineId();
+console.log("Calculated Machine ID:", process.env.MACHINE_ID);
+// --- MACHINE ID CALCULATION END ---
 
 let mainWindow;
 let nextAppProcess;

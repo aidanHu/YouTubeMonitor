@@ -2,7 +2,7 @@
 
 import { VideoCard } from "@/components/VideoCard";
 import { calculateVPH } from "@/utils/analytics";
-import { LayoutGrid, PlaySquare } from "lucide-react";
+import { LayoutGrid, PlaySquare, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useData } from "@/context/DataContext";
 
@@ -23,7 +23,7 @@ export function VideoList({
     searchQuery = "",
     dateRange = "all"
 }: VideoListProps) {
-    const { videoCache, setVideoCache } = useData();
+    const { videoCache, setVideoCache, isActivated } = useData();
     const [videos, setVideos] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [page, setPage] = useState(1);
@@ -64,14 +64,18 @@ export function VideoList({
 
             // Update Cache (Side Effect safely here)
             const nextVideos = reset ? newVideos : [...videos, ...newVideos];
-            setVideoCache({
-                key: currentCacheKey,
-                videos: nextVideos,
-                page: currentPage + 1,
-                hasMore: data.pagination.page < data.pagination.totalPages
-            });
+            if (data.pagination) {
+                setVideoCache({
+                    key: currentCacheKey,
+                    videos: nextVideos,
+                    page: currentPage + 1,
+                    hasMore: data.pagination.page < data.pagination.totalPages
+                });
 
-            setHasMore(data.pagination.page < data.pagination.totalPages);
+                setHasMore(data.pagination.page < data.pagination.totalPages);
+            } else {
+                setHasMore(false);
+            }
             setPage(currentPage + 1);
         } catch (e) {
             console.error(e);
@@ -97,6 +101,23 @@ export function VideoList({
         setPage(1);
         fetchVideos(true);
     }, [sortOrder, filterType, groupId, filter, searchQuery, dateRange]);
+
+    // Block view if not activated
+    if (!isActivated) {
+        return (
+            <div className="flex-1 h-full flex items-center justify-center bg-white dark:bg-zinc-900">
+                <div className="text-center space-y-4 max-w-sm mx-auto p-8 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
+                    <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <Lock size={32} />
+                    </div>
+                    <h2 className="text-xl font-bold text-zinc-900 dark:text-white">软件未激活</h2>
+                    <p className="text-zinc-500 dark:text-zinc-400 text-sm">
+                        请输入激活码以解锁全部功能。
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div>
@@ -136,6 +157,8 @@ export function VideoList({
                     );
                 })}
             </div>
+
+
 
             {/* Loading & More */}
             {loading && (

@@ -62,11 +62,12 @@ export async function PATCH(
     const { id } = await params;
     try {
         const body = await request.json();
-        const { groupId, isFavorite } = body;
+        const { groupId, isFavorite, isPinned } = body;
 
         const data: any = {};
         if (groupId !== undefined) data.groupId = groupId === null ? null : parseInt(groupId);
         if (isFavorite !== undefined) data.isFavorite = isFavorite;
+        if (isPinned !== undefined) data.isPinned = isPinned;
 
         await prisma.channel.update({
             where: { id },
@@ -104,7 +105,18 @@ export async function POST(
 
         await import("@/lib/youtube").then(async (mod) => {
             const videos = await mod.fetchChannelVideos(id, undefined, minDate);
+
+            // Track the latest video date
+            let maxPublishedAt = channel.lastUploadAt ? new Date(channel.lastUploadAt) : new Date(0);
+            let hasNewerVideo = false;
+
             for (const video of videos) {
+                const videoDate = new Date(video.publishedAt);
+                if (videoDate > maxPublishedAt) {
+                    maxPublishedAt = videoDate;
+                    hasNewerVideo = true;
+                }
+
                 await prisma.video.upsert({
                     where: { id: video.id },
                     update: {
@@ -126,6 +138,14 @@ export async function POST(
                         channelId: id,
                         isShort: video.isShort
                     }
+                });
+            }
+
+            // Update channel lastUploadAt if we found a newer video
+            if (hasNewerVideo) {
+                await prisma.channel.update({
+                    where: { id },
+                    data: { lastUploadAt: maxPublishedAt }
                 });
             }
         });

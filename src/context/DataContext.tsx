@@ -7,20 +7,24 @@ interface DataContextType {
     groups: Group[];
     channels: Channel[];
     loading: boolean;
+    isActivated: boolean; // Add type
     refreshData: (silent?: boolean) => Promise<void>;
-    dashboardScrollPosition: number;
-    setDashboardScrollPosition: (pos: number) => void;
+
+    // Scroll Persistence
+    scrollPositions: Record<string, number>;
+    setScrollPosition: (key: string, pos: number) => void;
+
     setGroups: React.Dispatch<React.SetStateAction<Group[]>>;
     setChannels: React.Dispatch<React.SetStateAction<Channel[]>>;
-    currentView: 'dashboard' | 'favorites' | 'downloads';
-    setCurrentView: (view: 'dashboard' | 'favorites' | 'downloads') => void;
-    currentTab: "channels" | "videos" | "favorites" | "analysis";
-    setCurrentTab: (tab: "channels" | "videos" | "favorites" | "analysis") => void;
+    currentView: 'dashboard' | 'downloads';
+    setCurrentView: (view: 'dashboard' | 'downloads') => void;
+    currentTab: "channels" | "videos" | "favoriteChannels" | "favoriteVideos" | "analysis";
+    setCurrentTab: (tab: "channels" | "videos" | "favoriteChannels" | "favoriteVideos" | "analysis") => void;
     // Persisted Dashboard State
     selectedGroupId: number | null;
     setSelectedGroupId: (id: number | null) => void;
-    sortOrder: "viewCount" | "publishedAt" | "viral" | "vph" | "zScore";
-    setSortOrder: (order: "viewCount" | "publishedAt" | "viral" | "vph" | "zScore") => void;
+    sortOrder: "viewCount" | "publishedAt" | "viral" | "vph" | "zScore" | "createdAt" | "lastUploadAt" | "subscriberCount" | "videoCount" | "averageViews";
+    setSortOrder: (order: "viewCount" | "publishedAt" | "viral" | "vph" | "zScore" | "createdAt" | "lastUploadAt" | "subscriberCount" | "videoCount" | "averageViews") => void;
     filterType: "all" | "video" | "short";
     setFilterType: (type: "all" | "video" | "short") => void;
     dateRange: "all" | "3d" | "7d" | "30d";
@@ -48,18 +52,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [groups, setGroups] = useState<Group[]>([]);
     const [channels, setChannels] = useState<Channel[]>([]);
     const [loading, setLoading] = useState(true);
-    const [dashboardScrollPosition, setDashboardScrollPosition] = useState(0);
 
-    const [currentView, setCurrentView] = useState<'dashboard' | 'favorites' | 'downloads'>('dashboard');
-    const [currentTab, setCurrentTab] = useState<"channels" | "videos" | "favorites" | "analysis">("analysis");
+    // Scroll state map
+    const [scrollPositions, setScrollPositionsState] = useState<Record<string, number>>({});
+
+    const setScrollPosition = (key: string, pos: number) => {
+        setScrollPositionsState(prev => ({ ...prev, [key]: pos }));
+    };
+
+    const [currentView, setCurrentView] = useState<'dashboard' | 'downloads'>('dashboard');
+    const [currentTab, setCurrentTab] = useState<"channels" | "videos" | "favoriteChannels" | "favoriteVideos" | "analysis">("analysis");
 
     // Persisted Filters
     const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
-    const [sortOrder, setSortOrder] = useState<"viewCount" | "publishedAt" | "viral" | "vph" | "zScore">("publishedAt");
+    const [sortOrder, setSortOrder] = useState<"viewCount" | "publishedAt" | "viral" | "vph" | "zScore" | "createdAt" | "lastUploadAt" | "subscriberCount" | "videoCount" | "averageViews">("publishedAt");
     const [filterType, setFilterType] = useState<"all" | "video" | "short">("all");
     const [dateRange, setDateRange] = useState<"all" | "3d" | "7d" | "30d">("all");
     const [searchQuery, setSearchQuery] = useState("");
 
+    const [isActivated, setIsActivated] = useState(false); // Add this state
     const [videoCache, setVideoCache] = useState<{
         key: string;
         videos: any[];
@@ -67,31 +78,54 @@ export function DataProvider({ children }: { children: ReactNode }) {
         hasMore: boolean;
     }>({ key: "", videos: [], page: 1, hasMore: true });
 
+    // ... refreshData code ...
+
     const refreshData = async (silent = false) => {
         if (!silent) setLoading(true);
         try {
-            console.log("[DataContext] Fetching data...");
-            const [gRes, cRes] = await Promise.all([
-                fetch("/api/groups"),
-                fetch("/api/channels")
-            ]);
+            console.log("[DataContext] Fetching /api/settings...");
+            const sRes = await fetch("/api/settings");
+            let activeStatus = false; // Renamed to avoid shadowing
 
-            if (gRes.ok) {
-                const groupsData = await gRes.json();
-                if (Array.isArray(groupsData)) {
-                    console.log("[DataContext] Groups loaded:", groupsData.length);
-                    setGroups(groupsData);
-                } else {
-                    console.error("[DataContext] Groups API returned non-array:", groupsData);
-                }
+            if (sRes.ok) {
+                const settings = await sRes.json();
+                console.log("[DataContext] Settings loaded. Activation status:", settings.isActivated);
+                activeStatus = !!settings.isActivated;
             }
-            if (cRes.ok) {
-                const channelsData = await cRes.json();
-                if (Array.isArray(channelsData)) {
-                    console.log("[DataContext] Channels loaded:", channelsData.length);
-                    setChannels(channelsData);
-                } else {
-                    console.error("[DataContext] Channels API returned non-array:", channelsData);
+
+            setIsActivated(activeStatus); // Update state!
+
+            if (!activeStatus) {
+                console.warn("[DataContext] Not activated. Skipping content load.");
+                setGroups([]);
+                setChannels([]);
+                // Optionally set a flag in state to show "Activation Needed" UI
+            } else {
+                console.log("[DataContext] Activated. Fetching content...");
+
+                // CRITICAL: Run migration check BEFORE fetching data to ensure schema matches
+                try {
+                    await fetch("/api/migrate");
+                } catch (migErr) {
+                    console.error("[DataContext] Migration check failed:", migErr);
+                }
+
+                const [gRes, cRes] = await Promise.all([
+                    fetch("/api/groups"),
+                    fetch(`/api/channels?sort=${sortOrder}`)
+                ]);
+
+                if (gRes.ok) {
+                    const groupsData = await gRes.json();
+                    if (Array.isArray(groupsData)) {
+                        setGroups(groupsData);
+                    }
+                }
+                if (cRes.ok) {
+                    const channelsData = await cRes.json();
+                    if (Array.isArray(channelsData)) {
+                        setChannels(channelsData);
+                    }
                 }
             }
         } catch (e) {
@@ -106,14 +140,23 @@ export function DataProvider({ children }: { children: ReactNode }) {
         refreshData();
     }, []);
 
+    // Re-fetch when sortOrder changes (only for channels sort context)
+    useEffect(() => {
+        if (sortOrder === 'createdAt' || sortOrder === 'lastUploadAt' || sortOrder === 'viewCount' || sortOrder === 'subscriberCount' || sortOrder === 'videoCount' || sortOrder === 'averageViews') {
+            refreshData(true);
+        }
+    }, [sortOrder]);
+
     return (
         <DataContext.Provider value={{
             groups,
             channels,
             loading,
             refreshData,
-            dashboardScrollPosition,
-            setDashboardScrollPosition,
+            // Scroll Persistence Maps
+            scrollPositions,
+            setScrollPosition,
+
             setGroups,
             setChannels,
             currentView,
@@ -126,7 +169,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
             dateRange, setDateRange,
             searchQuery, setSearchQuery,
             videoCache,
-            setVideoCache
+            setVideoCache,
+            isActivated, // Add to export
         }}>
             {children}
         </DataContext.Provider>

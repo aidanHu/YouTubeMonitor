@@ -4,15 +4,54 @@ import { resolveChannelId, updateChannelStats, fetchChannelVideos } from "@/lib/
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-    const channels = await prisma.channel.findMany({
+export async function GET(request: Request) {
+    const { searchParams } = new URL(request.url);
+    const sort = searchParams.get('sort');
+
+    const validSortFields = ['createdAt', 'lastUploadAt', 'viewCount', 'subscriberCount', 'videoCount', 'averageViews'];
+
+    // Default sort
+    let orderBy: any = [
+        { isPinned: "desc" },
+        { createdAt: "desc" }
+    ];
+
+    let isManualSort = false;
+
+    if (sort && validSortFields.includes(sort)) {
+        if (sort === 'averageViews') {
+            isManualSort = true;
+            // Fetch all to sort in memory
+            orderBy = undefined;
+        } else {
+            orderBy = [
+                { isPinned: "desc" },
+                { [sort]: "desc" }
+            ];
+        }
+    }
+
+    let channels = await prisma.channel.findMany({
         include: {
             group: true,
         },
-        orderBy: {
-            createdAt: "desc",
-        },
+        orderBy,
     });
+
+    if (isManualSort && sort === 'averageViews') {
+        channels = channels.sort((a, b) => {
+            // Pin priority
+            if (a.isPinned !== b.isPinned) {
+                return a.isPinned ? -1 : 1;
+            }
+
+            const avgA = (a.videoCount > 0) ? Number(a.viewCount) / a.videoCount : 0;
+            const avgB = (b.videoCount > 0) ? Number(b.viewCount) / b.videoCount : 0;
+
+            return avgB - avgA; // Descending
+        });
+    }
+
     // Convert BigInt to string for JSON serialization
     const serialized = channels.map((c) => ({
         ...c,
@@ -30,14 +69,19 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Invalid URLs" }, { status: 400 });
         }
 
-        const results = [];
+        const details = [];
+
         for (const url of urls) {
             try {
                 // 1. Resolve real ID
                 let channelId = await resolveChannelId(url);
 
                 if (!channelId) {
-                    console.error(`Could not resolve ID for ${url}`);
+                    details.push({
+                        url,
+                        status: 'error',
+                        message: '无法解析频道ID (无效的链接)'
+                    });
                     continue;
                 }
 
@@ -48,14 +92,18 @@ export async function POST(request: Request) {
                     console.log(`[AddChannel] Channel ${existing.name} (${channelId}) already exists. Update group only.`);
                     // Update group if provided and different
                     if (groupId && existing.groupId !== parseInt(groupId)) {
-                        const updated = await prisma.channel.update({
+                        await prisma.channel.update({
                             where: { id: channelId },
                             data: { groupId: parseInt(groupId) }
                         });
-                        results.push(updated);
-                    } else {
-                        results.push(existing);
                     }
+
+                    details.push({
+                        url,
+                        status: 'exists',
+                        message: '频道已存在',
+                        channelName: existing.name
+                    });
                     continue; // SKIP fetching stats and videos
                 }
 
@@ -65,6 +113,9 @@ export async function POST(request: Request) {
                     stats = await updateChannelStats(channelId);
                 } catch (err) {
                     console.error("Failed to fetch initial stats", err);
+                    // Use fallback if stats fetch fails but we have an ID? 
+                    // Or treat as error? Let's try to proceed as "Unknown" if we have ID.
+                    // But actually resolveChannelId might have succeeded.
                     stats = {
                         name: url,
                         thumbnail: null,
@@ -88,7 +139,17 @@ export async function POST(request: Request) {
                         groupId: groupId ? parseInt(groupId) : null
                     }
                 });
-                results.push(ch);
+
+                details.push({
+                    url,
+                    status: 'success',
+                    message: '添加成功',
+                    channelName: ch.name,
+                    channel: {
+                        ...ch,
+                        viewCount: ch.viewCount.toString()
+                    }
+                });
 
                 // 5. Fetch initial videos immediately (Cost: 2)
                 if (stats.uploadsPlaylistId) {
@@ -125,17 +186,17 @@ export async function POST(request: Request) {
                         console.error(`[AddChannel] Failed to fetch initial videos for ${channelId}`, videoErr);
                     }
                 }
-            } catch (e) {
+            } catch (e: any) {
                 console.error(`[AddChannel] Failed to add ${url}`, e);
+                details.push({
+                    url,
+                    status: 'error',
+                    message: e.message || '未知错误'
+                });
             }
         }
 
-        const serializedResults = results.map(channel => ({
-            ...channel,
-            viewCount: channel.viewCount.toString()
-        }));
-
-        return NextResponse.json(serializedResults);
+        return NextResponse.json({ results: details });
     } catch (e) {
         console.error("[API] Failed to parse request body or other error", e);
         return NextResponse.json({ error: "Invalid request body or server error" }, { status: 400 });

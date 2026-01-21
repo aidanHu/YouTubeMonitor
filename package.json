@@ -10,8 +10,8 @@
         "lint": "next lint",
         "electron": "electron ./electron/main.js",
         "electron-dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"electron ./electron/main.js\"",
-        "dist": "rm -rf .next dist standalone_package && npx prisma generate && npm run build && npm run copy-standalone && electron-builder",
-        "dist:win": "rm -rf .next dist standalone_package && npx prisma generate && npm run build && cross-env BUILD_PLATFORM=win npm run copy-standalone && electron-builder --win --x64",
+        "dist": "rm -rf .next release standalone_package && npx prisma generate && npm run build && npm run copy-standalone && electron-builder",
+        "dist:win": "rm -rf .next standalone_package && npx prisma generate && npm run build && cross-env BUILD_PLATFORM=win npm run copy-standalone && electron-builder --win --x64",
         "copy-standalone": "node prepare_standalone.js"
     },
     "build": {
@@ -40,7 +40,7 @@
             }
         ],
         "directories": {
-            "output": "dist"
+            "output": "release"
         },
         "mac": {
             "target": {

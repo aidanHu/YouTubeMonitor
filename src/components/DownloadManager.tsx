@@ -8,7 +8,7 @@ import { useState, useMemo } from "react";
 
 export function DownloadManager() {
     const { downloads, retryDownload, removeDownload, retryAllFailed, clearHistory } = useDownloads();
-    const { groups, channels } = useData();
+    const { groups, channels, isActivated } = useData();
     const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
 
     const filteredDownloads = useMemo(() => {
@@ -71,7 +71,13 @@ export function DownloadManager() {
                 <div className="flex gap-2">
                     {failedCount > 0 && (
                         <button
-                            onClick={retryAllFailed}
+                            onClick={() => {
+                                if (!isActivated) {
+                                    alert("软件未激活，无法使用此功能。\n请前往 [设置 -> 软件激活] 进行激活。");
+                                    return;
+                                }
+                                retryAllFailed();
+                            }}
                             className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-sm transition-colors"
                         >
                             <RefreshCwIcon size={14} />
@@ -79,7 +85,18 @@ export function DownloadManager() {
                         </button>
                     )}
                     <button
-                        onClick={clearHistory}
+                        onClick={() => {
+                            // Optional: Clear history might not need activation, but consistency is key OR maybe allow clearing? 
+                            // Let's protect it too as it's a management action.
+                            // Actually, clearing history is local, maybe allow it?
+                            // User asked for "using functionalities". Let's restrict core actions. 
+                            // Retry is core. Clear is maintenance. Let's restrict both for strong enforcement.
+                            if (!isActivated) {
+                                alert("软件未激活，无法管理记录。\n请前往 [设置 -> 软件激活] 进行激活。");
+                                return;
+                            }
+                            clearHistory();
+                        }}
                         className="flex items-center gap-2 px-3 py-1.5 bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 rounded-lg text-sm transition-colors"
                         title="清空已完成/失败记录"
                     >

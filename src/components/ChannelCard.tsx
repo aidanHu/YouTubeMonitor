@@ -1,7 +1,7 @@
 "use client";
 
 import { Channel } from "@/types";
-import { ExternalLink, Users, Video, Eye, Trash2, FolderInput, RefreshCw, Heart, DownloadCloud, Copy, Check, MoreHorizontal } from "lucide-react";
+import { ExternalLink, Users, Video, Eye, Trash2, FolderInput, RefreshCw, Heart, DownloadCloud, Copy, Check, MoreHorizontal, Pin, Clock } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { useDownloads } from "@/context/DownloadContext";
@@ -12,9 +12,10 @@ interface ChannelCardProps {
     onMove?: (id: string, name: string, currentGroupId: number | null) => void;
     onRefresh?: () => Promise<void>;
     onToggleFavorite?: (id: string, isFavorite: boolean) => Promise<void>;
+    onTogglePin?: (id: string, isPinned: boolean) => Promise<void>;
 }
 
-export function ChannelCard({ channel, onDelete, onMove, onRefresh, onToggleFavorite }: ChannelCardProps) {
+export function ChannelCard({ channel, onDelete, onMove, onRefresh, onToggleFavorite, onTogglePin }: ChannelCardProps) {
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isDownloadingAll, setIsDownloadingAll] = useState(false);
     const [isCopied, setIsCopied] = useState(false);
@@ -69,7 +70,24 @@ export function ChannelCard({ channel, onDelete, onMove, onRefresh, onToggleFavo
         <Link href={`/channel/${channel.id}`}>
             <div className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 hover:shadow-lg hover:border-blue-500/30 transition-all cursor-pointer h-full flex flex-col justify-between relative">
                 <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 flex gap-1">
-                    {/* Primary Actions: Favorite & Refresh */}
+                    {/* Primary Actions: Pin, Favorite & Refresh */}
+                    {onTogglePin && (
+                        <button
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onTogglePin(channel.id, !channel.isPinned);
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors ${channel.isPinned
+                                ? "bg-blue-50 dark:bg-blue-900/20 text-blue-500 hover:bg-blue-100"
+                                : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:text-blue-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                                }`}
+                            title={channel.isPinned ? "取消置顶" : "置顶频道"}
+                        >
+                            <Pin size={14} fill={channel.isPinned ? "currentColor" : "none"} />
+                        </button>
+                    )}
+
                     {onToggleFavorite && (
                         <button
                             onClick={(e) => {
@@ -176,16 +194,21 @@ export function ChannelCard({ channel, onDelete, onMove, onRefresh, onToggleFavo
 
                 <div className="flex items-start justify-between mb-4 mt-2">
                     <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-full bg-zinc-200 dark:bg-zinc-800 shrink-0 overflow-hidden relative">
+                        <div className="w-12 h-12 rounded-full bg-zinc-200 dark:bg-zinc-800 shrink-0 overflow-hidden relative border border-zinc-100 dark:border-zinc-700">
                             {/* Thumbnail placeholder */}
                             {channel.thumbnail ? (
                                 <img src={channel.thumbnail} alt={channel.name} className="w-full h-full object-cover" />
                             ) : (
                                 <div className="flex items-center justify-center w-full h-full text-zinc-400 text-xs">IMG</div>
                             )}
+                            {channel.isPinned && (
+                                <div className="absolute -top-1 -right-1 bg-blue-500 rounded-full p-0.5 border-2 border-white dark:border-zinc-900">
+                                    <svg width="8" height="8" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg>
+                                </div>
+                            )}
                         </div>
                         <div>
-                            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 line-clamp-1 break-all" title={channel.name}>
+                            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 line-clamp-1 break-all flex items-center gap-1" title={channel.name}>
                                 {channel.name}
                             </h3>
                             <div className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -209,7 +232,7 @@ export function ChannelCard({ channel, onDelete, onMove, onRefresh, onToggleFavo
                             <Eye size={12} /> 观看
                         </div>
                         <div className="font-mono text-sm font-medium">
-                            {new Intl.NumberFormat('en-US', { notation: "compact" }).format(parseInt(channel.viewCount))}
+                            {new Intl.NumberFormat('en-US', { notation: "compact" }).format(typeof channel.viewCount === 'string' ? parseInt(channel.viewCount) : Number(channel.viewCount))}
                         </div>
                     </div>
                     <div className="text-center border-l border-zinc-100 dark:border-zinc-800">
@@ -220,6 +243,30 @@ export function ChannelCard({ channel, onDelete, onMove, onRefresh, onToggleFavo
                             {channel.videoCount}
                         </div>
                     </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs text-zinc-400 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-1">
+                    <div className="flex items-center gap-1" title={channel.lastUploadAt ? new Date(channel.lastUploadAt).toLocaleString() : "暂无数据，请刷新"}>
+                        <Clock size={12} />
+                        <span>
+                            {channel.lastUploadAt ? (() => {
+                                const diff = new Date().getTime() - new Date(channel.lastUploadAt).getTime();
+                                const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+                                if (days === 0) return "今天更新";
+                                if (days === 1) return "昨天更新";
+                                if (days < 365) return `${days}天前更新`;
+                                return `${Math.floor(days / 365)}年前更新`;
+                            })() : "无记录 (请刷新)"}
+                        </span>
+                    </div>
+                    {channel.lastUploadAt && (new Date().getTime() - new Date(channel.lastUploadAt).getTime() > 1000 * 60 * 60 * 24 * 30) && (
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${(new Date().getTime() - new Date(channel.lastUploadAt).getTime() > 1000 * 60 * 60 * 24 * 90)
+                            ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400"
+                            : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
+                            }`}>
+                            {(new Date().getTime() - new Date(channel.lastUploadAt).getTime() > 1000 * 60 * 60 * 24 * 90) ? "长期停更" : "近期停更"}
+                        </span>
+                    )}
                 </div>
             </div>
         </Link>

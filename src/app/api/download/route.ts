@@ -139,8 +139,11 @@ export async function POST(request: Request) {
                             where: { id: videoId },
                             data: { localPath: targetFile }
                         });
-                    } catch (dbErr) {
-                        console.error("Failed to update localPath in DB", dbErr);
+                    } catch (dbErr: any) {
+                        // Ignore "Record to update not found" error for ad-hoc downloads
+                        if (dbErr.code !== 'P2025') {
+                            console.warn("Failed to update localPath in DB", dbErr.message);
+                        }
                     }
 
                     setTimeout(() => downloadStates.delete(videoId), 60000);

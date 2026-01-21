@@ -11,6 +11,7 @@ datasource db {
 model Group {
   id       Int       @id @default(autoincrement())
   name     String    @unique
+  isPinned Boolean   @default(false)
   channels Channel[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -28,6 +29,8 @@ model Channel {
   groupId         Int?
   group           Group?    @relation(fields: [groupId], references: [id])
   isFavorite      Boolean   @default(false)
+  isPinned        Boolean   @default(false)
+  lastUploadAt    DateTime? 
   
   videos          Video[]
   
@@ -72,6 +75,7 @@ model Settings {
   downloadPath String   @default("")
   proxyUrl     String?
   cookieSource String?  @default("none") // "none", "chrome", "firefox", "edge" or path
+  activationCode String? 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }

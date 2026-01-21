@@ -237,7 +237,7 @@ export async function fetchChannelVideos(channelId: string, uploadsPlaylistId?: 
     // Safety limit to prevent infinite loops or massive quota usage
     // 50 pages * 50 videos = 2500 videos max per refresh
     let pageCount = 0;
-    const MAX_PAGES = 50; 
+    const MAX_PAGES = 50;
 
     while (shouldContinue && pageCount < MAX_PAGES) {
         const url: string = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&playlistId=${playlistId}&maxResults=50&key=${key.key}${nextPageToken ? `&pageToken=${nextPageToken}` : ''}`;
@@ -249,12 +249,12 @@ export async function fetchChannelVideos(channelId: string, uploadsPlaylistId?: 
 
         const data = await res.json();
         const items = data.items || [];
-        
+
         if (items.length === 0) break;
 
         for (const item of items) {
             const publishedAt = new Date(item.snippet.publishedAt);
-            
+
             // If minDate is set and we reached a video older than minDate
             if (minDate && publishedAt < minDate) {
                 shouldContinue = false;
@@ -267,7 +267,7 @@ export async function fetchChannelVideos(channelId: string, uploadsPlaylistId?: 
         if (!nextPageToken || !shouldContinue) {
             break;
         }
-        
+
         pageCount++;
     }
 
@@ -325,6 +325,33 @@ export async function fetchChannelVideos(channelId: string, uploadsPlaylistId?: 
 
         finalResults.push(...processed);
     }
-    
+
     return finalResults;
+}
+
+export async function resolveVideoDetails(videoId: string) {
+    const key = await getValidKey();
+    if (!key) throw new Error("No valid keys");
+
+    const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${key.key}`;
+    const res = await fetchWithProxy(apiUrl);
+    await incrementUsage(key.id, 1);
+
+    if (!res.ok) {
+        throw new Error(`API Error: ${res.status}`);
+    }
+
+    const data = await res.json();
+    const item = data.items?.[0];
+
+    if (!item) return null;
+
+    return {
+        id: item.id,
+        title: item.snippet.title,
+        thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
+        channelName: item.snippet.channelTitle,
+        channelId: item.snippet.channelId,
+        publishedAt: item.snippet.publishedAt
+    };
 }

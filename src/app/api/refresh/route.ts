@@ -33,6 +33,9 @@ export async function POST(request: Request) {
         if (range === '3d') past.setDate(now.getDate() - 3);
         else if (range === '7d') past.setDate(now.getDate() - 7);
         else if (range === '30d') past.setDate(now.getDate() - 30);
+        else if (range === '3m') past.setDate(now.getDate() - 90);
+        else if (range === '6m') past.setDate(now.getDate() - 180);
+        else if (range === '1y') past.setDate(now.getDate() - 365);
         minDate = past;
     }
 

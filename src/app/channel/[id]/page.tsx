@@ -1,6 +1,6 @@
 "use client";
 
-import { Channel, Group } from "@/types";
+import { Channel, Group, Video } from "@/types";
 import { ArrowLeft, ExternalLink, RefreshCw, ChevronDown, Edit, Trash2, DownloadCloud, Heart } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -10,18 +10,6 @@ import { VideoCard } from "@/components/VideoCard";
 import { MoveChannelModal } from "@/components/MoveChannelModal";
 import { useData } from "@/context/DataContext";
 import { useDownloads } from "@/context/DownloadContext";
-
-interface Video {
-    id: string;
-    title: string;
-    url: string;
-    thumbnail: string | null;
-    publishedAt: string;
-    viewCount: string;
-    likeCount: number | null;
-    commentCount: number | null;
-    isShort: boolean;
-}
 
 interface ChannelDetail extends Channel {
     videos: Video[];
@@ -104,7 +92,7 @@ export default function ChannelPage({ params }: { params: Promise<{ id: string }
     const [channel, setChannel] = useState<ChannelDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState<"all" | "videos" | "shorts">("all");
+    const [activeTab, setActiveTab] = useState<"all" | "videos" | "shorts" | "favorites">("all");
     const [sortBy, setSortBy] = useState<"publishedAt" | "viewCount" | "vph" | "er" | "zScore" | "viral">("publishedAt");
     const [isDownloadingAll, setIsDownloadingAll] = useState(false); // state
 
@@ -254,6 +242,8 @@ export default function ChannelPage({ params }: { params: Promise<{ id: string }
         if (!channel?.videos) return [];
         return channel.videos.map(video => {
             const metrics = analyzeVideo(video, stats);
+            // Ensure isFavorite is passed through if it exists on video object
+            // The API response should include it.
             return { ...video, metrics };
         });
     }, [channel?.videos, stats]);
@@ -263,6 +253,7 @@ export default function ChannelPage({ params }: { params: Promise<{ id: string }
             if (activeTab === "all") return true;
             if (activeTab === "videos") return !v.isShort;
             if (activeTab === "shorts") return v.isShort;
+            if (activeTab === "favorites") return v.isFavorite;
             return true;
         });
 
@@ -378,6 +369,12 @@ export default function ChannelPage({ params }: { params: Promise<{ id: string }
                             className={`text-sm font-medium px-4 py-2 border-b-2 transition-colors ${activeTab === "shorts" ? "border-zinc-900 dark:border-zinc-100 text-zinc-900 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
                         >
                             Shorts
+                        </button>
+                        <button
+                            onClick={() => setActiveTab("favorites")}
+                            className={`text-sm font-medium px-4 py-2 border-b-2 transition-colors flex items-center gap-1 ${activeTab === "favorites" ? "border-zinc-900 dark:border-zinc-100 text-zinc-900 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
+                        >
+                            <Heart size={14} fill={activeTab === "favorites" ? "currentColor" : "none"} /> 收藏内容
                         </button>
                     </div>
 

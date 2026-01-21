@@ -23,6 +23,7 @@ interface DownloadContextType {
     removeDownload: (id: string) => void;
     queueDownloads: (videos: { id: string; title: string; thumbnail: string | null; channelName: string; channelId?: string }[]) => void;
     clearHistory: () => void;
+    restoreHistory: (items: any[]) => void;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
@@ -235,8 +236,23 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         setDownloads(prev => prev.filter(d => d.status === 'downloading' || d.status === 'queued'));
     };
 
+    const restoreHistory = (items: any[]) => {
+        setDownloads(prev => {
+            // Merge restored items, avoiding duplicates
+            const existingIds = new Set(prev.map(d => d.id));
+            const newItems = items
+                .filter(item => !existingIds.has(item.id))
+                .map(item => ({
+                    ...item,
+                    startTime: new Date(item.startTime || Date.now())
+                }));
+
+            return [...prev, ...newItems].sort((a, b) => b.startTime.getTime() - a.startTime.getTime());
+        });
+    };
+
     return (
-        <DownloadContext.Provider value={{ downloads, startDownload, retryDownload, retryAllFailed, removeDownload, queueDownloads, clearHistory }}>
+        <DownloadContext.Provider value={{ downloads, startDownload, retryDownload, retryAllFailed, removeDownload, queueDownloads, clearHistory, restoreHistory }}>
             {children}
         </DownloadContext.Provider>
     );

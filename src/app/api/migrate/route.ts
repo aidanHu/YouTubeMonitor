@@ -5,24 +5,83 @@ import path from 'path';
 
 export const dynamic = "force-dynamic";
 
-// GET: DB Schema Migration (Add localPath column)
+// GET: DB Schema Migration
 export async function GET() {
     try {
-        // Attempt to add 'localPath' column to Video table
+        const migrations = [];
+
+        // 1. Check for 'localPath' in Video
         try {
             await prisma.$executeRawUnsafe(`ALTER TABLE "Video" ADD COLUMN "localPath" TEXT;`);
-            console.log("[Migrate] Added localPath column to Video table.");
-            return NextResponse.json({ success: true, message: "Added localPath column" });
-        } catch (e: any) {
-            const msg = e.message.toLowerCase();
-            if (msg.includes("duplicate column") || msg.includes("already exists")) {
-                // Component already exists, which is fine
-                return NextResponse.json({ success: true, message: "Column already exists" });
-            }
-            // If it's another error, we might log it but usually for SQLite it's just "duplicate column"
-            console.warn("[Migrate] Add column warning:", e.message);
-            return NextResponse.json({ success: true, message: "Checked schema" });
+            migrations.push("Added localPath column to Video");
+        } catch (e: any) { /* Ignore if exists */ }
+
+        // 2. Check for 'isPinned' in Group
+        try {
+            // Try to select the column to see if it exists
+            await prisma.$queryRaw`SELECT isPinned FROM "Group" LIMIT 1`;
+        } catch (e) {
+            // Column missing, add it
+            try {
+                await prisma.$executeRawUnsafe(`ALTER TABLE "Group" ADD COLUMN "isPinned" BOOLEAN NOT NULL DEFAULT 0`);
+                migrations.push("Added isPinned column to Group");
+            } catch (err) { console.error("Failed to add isPinned to Group", err); }
         }
+
+        // 3. Check for 'isPinned' in Channel
+        try {
+            await prisma.$queryRaw`SELECT isPinned FROM "Channel" LIMIT 1`;
+        } catch (e) {
+            try {
+                await prisma.$executeRawUnsafe(`ALTER TABLE "Channel" ADD COLUMN "isPinned" BOOLEAN NOT NULL DEFAULT 0`);
+                migrations.push("Added isPinned column to Channel");
+            } catch (err) { console.error("Failed to add isPinned to Channel", err); }
+        }
+
+        // 4. Check for 'createdAt' in Channel (Optional safeguard)
+        try {
+            await prisma.$queryRaw`SELECT createdAt FROM "Channel" LIMIT 1`;
+        } catch (e) {
+            try {
+                await prisma.$executeRawUnsafe(`ALTER TABLE "Channel" ADD COLUMN "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+                migrations.push("Added createdAt column to Channel");
+            } catch (err) { console.error("Failed to add createdAt to Channel", err); }
+        }
+
+        // 5. Check for 'lastUploadAt' in Channel
+        try {
+            await prisma.$queryRaw`SELECT lastUploadAt FROM "Channel" LIMIT 1`;
+        } catch (e) {
+            try {
+                await prisma.$executeRawUnsafe(`ALTER TABLE "Channel" ADD COLUMN "lastUploadAt" DATETIME`);
+                migrations.push("Added lastUploadAt column to Channel");
+            } catch (err) { console.error("Failed to add lastUploadAt to Channel", err); }
+        }
+
+        // 6. Backfill lastUploadAt from existing videos (Improvement)
+        try {
+            // Only run if we have channels with null lastUploadAt
+            const updateCount = await prisma.$executeRawUnsafe(`
+                UPDATE "Channel"
+                SET "lastUploadAt" = (
+                    SELECT MAX("publishedAt")
+                    FROM "Video"
+                    WHERE "Video"."channelId" = "Channel"."id"
+                )
+                WHERE "lastUploadAt" IS NULL AND EXISTS (
+                    SELECT 1 FROM "Video" WHERE "Video"."channelId" = "Channel"."id"
+                );
+            `);
+            if (updateCount > 0) {
+                migrations.push(`Backfilled lastUploadAt for ${updateCount} channels`);
+            }
+        } catch (err) {
+            console.error("Failed to backfill lastUploadAt", err);
+        }
+
+        console.log("[Migration] Status:", migrations.length > 0 ? migrations : "Schema up to date");
+        return NextResponse.json({ success: true, migrations });
+
     } catch (e: any) {
         console.error("[Migrate] Migration failed:", e.message);
         return NextResponse.json({ success: false, error: e.message }, { status: 500 });

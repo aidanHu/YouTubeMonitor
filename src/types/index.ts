@@ -1,6 +1,7 @@
 export interface Group {
     id: number;
     name: string;
+    isPinned: boolean;
 }
 
 export interface Channel {
@@ -14,6 +15,9 @@ export interface Channel {
     groupId: number | null;
     group?: Group;
     isFavorite: boolean;
+    isPinned: boolean;
+    createdAt: string | Date;
+    lastUploadAt?: string | Date; // Optional as older channels might not have it yet
 }
 
 export interface ApiKey {

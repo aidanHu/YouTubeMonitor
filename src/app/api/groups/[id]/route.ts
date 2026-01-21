@@ -33,14 +33,16 @@ export async function PATCH(
     const params = await props.params;
     const id = parseInt(params.id);
     const body = await request.json();
-    const { name } = body;
+    const { name, isPinned } = body;
 
-    if (!name) return NextResponse.json({ error: "Name required" }, { status: 400 });
+    const data: any = {};
+    if (name !== undefined) data.name = name;
+    if (isPinned !== undefined) data.isPinned = isPinned;
 
     try {
         const group = await prisma.group.update({
             where: { id },
-            data: { name }
+            data
         });
         return NextResponse.json(group);
     } catch (e) {

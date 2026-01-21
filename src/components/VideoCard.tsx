@@ -28,12 +28,15 @@ export interface VideoCardProps {
     showChannel?: boolean;
 }
 
+import { useData } from "@/context/DataContext";
+
 export function VideoCard({ video, metrics, showChannel = false }: VideoCardProps) {
     const views = Number(video.viewCount);
     const publishedAt = new Date(video.publishedAt);
     const [isFavorite, setIsFavorite] = useState(video.isFavorite || false);
     const [isCopied, setIsCopied] = useState(false);
     const { startDownload, downloads } = useDownloads();
+    const { isActivated } = useData();
 
     // Check if this video is currently downloading or queued
     // Check if this video is currently downloading or queued
@@ -80,6 +83,12 @@ export function VideoCard({ video, metrics, showChannel = false }: VideoCardProp
     const handleDownload = async (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+
+        if (!isActivated) {
+            alert("软件未激活，无法下载视频。\n请前往 [设置 -> 软件激活] 进行激活。");
+            return;
+        }
+
         // Direct download without confirmation
         startDownload({
             id: video.id,

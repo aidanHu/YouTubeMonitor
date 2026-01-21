@@ -4,7 +4,12 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-    const groups = await prisma.group.findMany();
+    const groups = await prisma.group.findMany({
+        orderBy: [
+            { isPinned: "desc" },
+            { createdAt: "asc" }
+        ]
+    });
     return NextResponse.json(groups);
 }
 
