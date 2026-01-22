@@ -1,86 +1,110 @@
 "use client";
 
+import { invoke } from "@tauri-apps/api/core";
 import { VideoCard } from "@/components/VideoCard";
 import { calculateVPH } from "@/utils/analytics";
 import { LayoutGrid, PlaySquare, Lock } from "lucide-react";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useData } from "@/context/DataContext";
+import { VirtuosoGrid } from "react-virtuoso";
+import { Video } from "@/types";
+
+interface VideoWithStats extends Video {
+    avg_views?: number;
+    stdDev?: number;
+}
 
 interface VideoListProps {
-    groupId?: number | null;
+    group_id?: number | null;
     filter?: "favorites" | "all";
-    sortOrder: "viewCount" | "publishedAt" | "viral" | "vph" | "zScore";
-    filterType: "all" | "video" | "short";
-    searchQuery?: string;
-    dateRange?: "all" | "3d" | "7d" | "30d";
+    sort_order: "view_count" | "published_at" | "viral" | "vph" | "z_score";
+    filter_type: "all" | "video" | "short";
+    search_query?: string;
+    date_range?: "all" | "3d" | "7d" | "30d";
+    scrollParent?: HTMLElement | null;
 }
 
 export function VideoList({
-    groupId = null,
+    group_id = null,
     filter = "all",
-    sortOrder,
-    filterType,
-    searchQuery = "",
-    dateRange = "all"
+    sort_order,
+    filter_type,
+    search_query = "",
+    date_range = "all",
+    scrollParent
 }: VideoListProps) {
-    const { videoCache, setVideoCache, isActivated } = useData();
-    const [videos, setVideos] = useState<any[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [page, setPage] = useState(1);
-    const [hasMore, setHasMore] = useState(true);
+    const { video_cache, set_video_cache, is_activated } = useData();
+    const [videos, set_videos] = useState<VideoWithStats[]>([]);
+    const [loading, set_loading] = useState(false);
+    const [page, set_page] = useState(1);
+    const [has_more, set_has_more] = useState(true);
 
     const generateCacheKey = () => {
-        return JSON.stringify({ groupId, filter, sortOrder, filterType, searchQuery, dateRange });
+        return JSON.stringify({ group_id, filter, sort_order, filter_type, search_query, date_range });
     };
 
-    const fetchVideos = async (reset = false) => {
+    const fetch_videos = async (reset = false) => {
         const currentCacheKey = generateCacheKey();
 
         // If resetting, we clear cache immediately for this key
         if (reset) {
-            setLoading(true);
+            set_loading(true);
         } else {
             // If loading more
-            setLoading(true);
+            set_loading(true);
         }
 
         const currentPage = reset ? 1 : page;
 
         try {
-            let url = `/api/videos?page=${currentPage}&limit=50&sort=${sortOrder}&type=${filterType}`;
-            if (groupId) url += `&groupId=${groupId}`;
-            if (filter === "favorites") url += `&filter=favorites`;
-            if (searchQuery) url += `&q=${encodeURIComponent(searchQuery)}`;
-            if (dateRange && dateRange !== "all") url += `&dateRange=${dateRange}`;
+            // Updated to use Tauri invoke
+            // Mapped to Rust get_videos signature:
+            // page, limit, sort, filter_type, group_id, favorites, search, date_range, channel_id
 
-            const res = await fetch(url);
-            const data = await res.json();
-            const newVideos = data.data || [];
+            interface VideoResponse {
+                videos: VideoWithStats[];
+                has_more: boolean;
+                total: number;
+            }
 
-            setVideos(prev => {
+            const res = await invoke<VideoResponse>('get_videos', {
+                page: currentPage,
+                limit: 50,
+                sort: sort_order,
+                filter_type,
+                group_id: group_id || null,
+                favorites: filter === 'favorites',
+                search: search_query || null,
+                date_range: date_range,
+                channel_id: null
+            });
+
+            const newVideos = res.videos || [];
+
+            set_videos(prev => {
                 const nextVideos = reset ? newVideos : [...prev, ...newVideos];
                 return nextVideos;
             });
 
             // Update Cache (Side Effect safely here)
             const nextVideos = reset ? newVideos : [...videos, ...newVideos];
-            if (data.pagination) {
-                setVideoCache({
+            if (res.has_more !== undefined) {
+                set_video_cache({
                     key: currentCacheKey,
                     videos: nextVideos,
                     page: currentPage + 1,
-                    hasMore: data.pagination.page < data.pagination.totalPages
+                    has_more: res.has_more
                 });
-
-                setHasMore(data.pagination.page < data.pagination.totalPages);
+                set_has_more(res.has_more);
             } else {
-                setHasMore(false);
+                // If has_more missing for some reason
+                set_has_more(false);
             }
-            setPage(currentPage + 1);
+            set_page(currentPage + 1);
         } catch (e) {
-            console.error(e);
+            console.error("Failed to fetch videos via Tauri", e);
         } finally {
-            setLoading(false);
+            set_loading(false);
         }
     };
 
@@ -88,22 +112,22 @@ export function VideoList({
         const cacheKey = generateCacheKey();
 
         // Check if cache hits
-        if (videoCache.key === cacheKey && videoCache.videos.length > 0) {
-            console.log("Restoring videos from cache", videoCache.videos.length);
-            setVideos(videoCache.videos);
-            setPage(videoCache.page);
-            setHasMore(videoCache.hasMore);
-            setLoading(false);
+        if (video_cache.key === cacheKey && video_cache.videos.length > 0) {
+            console.log("Restoring videos from cache", video_cache.videos.length);
+            set_videos(video_cache.videos);
+            set_page(video_cache.page);
+            set_has_more(video_cache.has_more);
+            set_loading(false);
             return;
         }
 
         // Cache miss, clean fetch
-        setPage(1);
-        fetchVideos(true);
-    }, [sortOrder, filterType, groupId, filter, searchQuery, dateRange]);
+        set_page(1);
+        fetch_videos(true);
+    }, [sort_order, filter_type, group_id, filter, search_query, date_range, useData().last_updated]);
 
     // Block view if not activated
-    if (!isActivated) {
+    if (!is_activated) {
         return (
             <div className="flex-1 h-full flex items-center justify-center bg-white dark:bg-zinc-900">
                 <div className="text-center space-y-4 max-w-sm mx-auto p-8 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
@@ -119,62 +143,94 @@ export function VideoList({
         );
     }
 
+    const handle_toggle_favorite = (id: string, newStatus: boolean) => {
+        const updater = (list: any[]) => {
+            if (filter === 'favorites' && !newStatus) {
+                return list.filter(v => v.id !== id);
+            }
+            return list.map(v => v.id === id ? { ...v, is_favorite: newStatus } : v);
+        };
+
+        set_videos(prev => updater(prev));
+
+        // Update cache so switching tabs doesn't revert state
+        if (video_cache.key === generateCacheKey()) {
+            set_video_cache((prev: any) => ({
+                ...prev,
+                videos: updater(prev.videos)
+            }));
+        }
+    };
+
     return (
-        <div>
+        <div className="h-full">
             {/* Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8 gap-4">
-                {videos.map((video) => {
-                    const vph = calculateVPH(video.publishedAt, video.viewCount);
-                    // Use channel info from API to calculate Viral Multiplier
-                    const channelAvg = (video as any).channel?.avgViews || 0;
-                    const channelStdDev = (video as any).channel?.stdDev || 0;
-                    const views = Number(video.viewCount);
-                    const multiplier = channelAvg > 0 ? views / channelAvg : 0;
-                    const zScore = channelStdDev > 0 ? (views - channelAvg) / channelStdDev : 0;
+            {videos.length > 0 && (
+                <VirtuosoGrid
+                    style={{ height: '100%' }}
+                    customScrollParent={scrollParent || undefined}
+                    data={videos}
+                    overscan={200}
+                    components={{
+                        List: React.forwardRef<HTMLDivElement, React.ComponentPropsWithRef<'div'>>(({ style, children, ...props }, ref) => (
+                            <div
+                                ref={ref}
+                                {...props}
+                                style={style}
+                                className="grid grid-cols-[repeat(auto-fill,220px)] gap-4 items-stretch pb-20"
+                            >
+                                {children}
+                            </div>
+                        ))
+                    }}
+                    itemContent={(index: number, video: VideoWithStats) => {
+                        const vph = calculateVPH(video.published_at, Number(video.view_count));
+                        // Use channel info from backend
+                        const channelAvg = video.avg_views || 0;
+                        const channelStdDev = video.stdDev || 0;
+                        const views = Number(video.view_count);
+                        const multiplier = channelAvg > 0 ? views / channelAvg : 0;
+                        const z_score = channelStdDev > 0 ? (views - channelAvg) / channelStdDev : 0;
 
-                    const metrics = {
-                        vph,
-                        er: 0,
-                        zScore,
-                        multiplier,
-                        label: "Normal" as "Normal" | "Viral" | "High"
-                    };
+                        const metrics = {
+                            vph,
+                            er: 0,
+                            z_score,
+                            multiplier,
+                            label: "Normal" as "Normal" | "Viral" | "High"
+                        };
 
-                    if (video.likeCount !== undefined && video.commentCount !== undefined) {
-                        metrics.er = ((video.likeCount || 0) + (video.commentCount || 0)) / views * 100;
-                    }
+                        if (video.like_count !== undefined && video.comment_count !== undefined) {
+                            metrics.er = ((video.like_count || 0) + (video.comment_count || 0)) / views * 100;
+                        }
 
-                    if (multiplier > 2.5) metrics.label = "Viral" as const;
-                    else if (multiplier > 1.2) metrics.label = "High" as const;
+                        if (multiplier > 2.5) metrics.label = "Viral" as const;
+                        else if (multiplier > 1.2) metrics.label = "High" as const;
 
-                    return (
-                        <VideoCard
-                            key={video.id}
-                            video={video}
-                            showChannel={true}
-                            metrics={metrics}
-                        />
-                    );
-                })}
-            </div>
+                        return (
+                            <div className="h-full">
+                                <VideoCard
+                                    key={video.id}
+                                    video={video}
+                                    show_channel={true}
+                                    metrics={metrics}
+                                    on_toggle_favorite={handle_toggle_favorite}
+                                />
+                            </div>
+                        );
+                    }}
+                    endReached={() => {
+                        if (has_more && !loading) {
+                            fetch_videos(false);
+                        }
+                    }}
+                />
+            )}
 
-
-
-            {/* Loading & More */}
+            {/* Loading */}
             {loading && (
                 <div className="flex justify-center py-12">
                     <div className="w-6 h-6 border-2 border-zinc-200 border-t-zinc-800 rounded-full animate-spin"></div>
-                </div>
-            )}
-
-            {!loading && hasMore && videos.length > 0 && (
-                <div className="mt-8 text-center">
-                    <button
-                        onClick={() => fetchVideos(false)}
-                        className="bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 px-6 py-2 rounded-full text-sm font-medium transition-colors"
-                    >
-                        加载更多
-                    </button>
                 </div>
             )}
 

@@ -1,6 +1,10 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useMemo } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { useData } from './DataContext';
+import { show_alert } from '@/lib/dialogs';
 
 export interface DownloadItem {
     id: string; // Video ID
@@ -8,30 +12,33 @@ export interface DownloadItem {
     thumbnail: string | null;
     status: 'queued' | 'downloading' | 'completed' | 'error';
     progress: number; // 0-100
-    startTime: Date;
+    start_time: Date;
     error?: string;
-    channelName?: string;
-    channelId?: string;
+    channel_name?: string;
+    channel_id?: string;
     path?: string;
+    speed?: string;
+    eta?: string;
 }
 
 interface DownloadContextType {
     downloads: DownloadItem[];
-    startDownload: (video: { id: string; title: string; thumbnail: string | null; channelName: string; channelId?: string }) => Promise<void>;
-    retryDownload: (id: string) => Promise<void>;
-    retryAllFailed: () => void;
-    removeDownload: (id: string) => void;
-    queueDownloads: (videos: { id: string; title: string; thumbnail: string | null; channelName: string; channelId?: string }[]) => void;
-    clearHistory: () => void;
-    restoreHistory: (items: any[]) => void;
+    start_download: (video: { id: string; title: string; thumbnail: string | null; channel_name: string; channel_id?: string }) => Promise<void>;
+    retry_download: (id: string) => Promise<void>;
+    retry_all_failed: () => void;
+    remove_download: (id: string) => void;
+    queue_downloads: (videos: { id: string; title: string; thumbnail: string | null; channel_name: string; channel_id?: string }[]) => void;
+    clear_history: () => void;
+    cancel_download: (id: string) => Promise<void>;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
 
 export function DownloadProvider({ children }: { children: ReactNode }) {
-    const [downloads, setDownloads] = useState<DownloadItem[]>([]);
-    const [loaded, setLoaded] = useState(false);
+    const [downloads, set_downloads] = useState<DownloadItem[]>([]);
+    const [loaded, set_loaded] = useState(false);
     const MAX_CONCURRENT = 3;
+    const { settings, is_activated } = useData();
 
     // Load from localStorage on mount
     useEffect(() => {
@@ -39,134 +46,124 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-
                 if (Array.isArray(parsed)) {
-                    // Restore Date objects
+                    // Restore Date objects and reset 'downloading' status to 'queued'
                     const restored = parsed.map((item: any) => ({
                         ...item,
-                        startTime: new Date(item.startTime)
+                        start_time: new Date(item.start_time),
+                        status: (item.status === 'downloading' || item.status === 'queued') ? 'queued' : item.status,
+                        progress: item.status === 'downloading' ? item.progress : (item.progress || 0)
                     }));
-                    setDownloads(restored);
-                } else {
-                    console.warn("Invalid download history format in localStorage, resetting.");
-                    localStorage.removeItem('download_history');
+                    set_downloads(restored);
                 }
             } catch (e) {
                 console.error("Failed to load history", e);
             }
         }
-        setLoaded(true);
+        set_loaded(true);
     }, []);
 
-    // Save to localStorage on change
+    // Save to localStorage
     useEffect(() => {
         if (loaded) {
             localStorage.setItem('download_history', JSON.stringify(downloads));
         }
     }, [downloads, loaded]);
 
-    const updateDownload = (id: string, updates: Partial<DownloadItem>) => {
-        setDownloads(prev => prev.map(d => d.id === id ? { ...d, ...updates } : d));
-    };
+    // Setup Event Listeners
+    useEffect(() => {
+        let unlisten_progress: (() => void) | undefined;
+        let unlisten_complete: (() => void) | undefined;
+        let unlisten_error: (() => void) | undefined;
 
-    // Queue Processing Logic
+        const setup_listeners = async () => {
+            unlisten_progress = await listen<any>('download-progress', (event) => {
+                const { video_id, progress, speed, eta } = event.payload;
+                set_downloads(prev => prev.map(d =>
+                    d.id === video_id ? { ...d, status: 'downloading', progress, speed, eta } : d
+                ));
+            });
+
+            unlisten_complete = await listen<any>('download-complete', (event) => {
+                let video_id = "";
+                let path = "";
+
+                if (typeof event.payload === 'string') {
+                    video_id = event.payload;
+                } else {
+                    video_id = event.payload.video_id;
+                    path = event.payload.path;
+                }
+
+                set_downloads(prev => prev.map(d =>
+                    d.id === video_id ? { ...d, status: 'completed', progress: 100, error: undefined, path: path } : d
+                ));
+            });
+
+            unlisten_error = await listen<any>('download-error', (event) => {
+                const { video_id, error } = event.payload;
+                set_downloads(prev => prev.map(d =>
+                    d.id === video_id ? { ...d, status: 'error', error: error || "Download Failed" } : d
+                ));
+            });
+        };
+
+        setup_listeners();
+
+        return () => {
+            if (unlisten_progress) unlisten_progress();
+            if (unlisten_complete) unlisten_complete();
+            if (unlisten_error) unlisten_error();
+        };
+    }, []);
+
+    // Queue Processing
     useEffect(() => {
         if (!loaded) return;
 
-        const activeCount = downloads.filter(d => d.status === 'downloading').length;
-        if (activeCount >= MAX_CONCURRENT) return;
+        const active_count = downloads.filter(d => d.status === 'downloading').length;
+        if (active_count >= MAX_CONCURRENT) return;
 
-        // Find next queued item
-        // We pick the 'queued' item with the earliest startTime (FIFO)
-        // Wait, startTime created when added to queue.
-        const nextItem = downloads
+        const next_item = downloads
             .filter(d => d.status === 'queued')
-            .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())[0];
+            .sort((a, b) => a.start_time.getTime() - b.start_time.getTime())[0];
 
-        if (nextItem) {
-            startActualDownload(nextItem);
+        if (next_item) {
+            process_download(next_item);
         }
     }, [downloads, loaded]);
 
-    // Poll for progress of ACTIVE items only
-    useEffect(() => {
-        const interval = setInterval(async () => {
-            const downloadingItems = downloads.filter(d => d.status === 'downloading');
-            if (downloadingItems.length === 0) return;
-
-            for (const item of downloadingItems) {
-                try {
-                    const res = await fetch(`/api/download?id=${item.id}`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data.status === 'active' && data.progress !== undefined) {
-                            setDownloads(prev => prev.map(d =>
-                                d.id === item.id ? { ...d, progress: data.progress } : d
-                            ));
-                        } else if (data.status === 'completed') {
-                            setDownloads(prev => prev.map(d =>
-                                d.id === item.id ? { ...d, status: 'completed', progress: 100, error: undefined } : d
-                            ));
-                        } else if (data.status === 'error') {
-                            setDownloads(prev => prev.map(d =>
-                                d.id === item.id ? { ...d, status: 'error', error: data.error || "下载失败" } : d
-                            ));
-                        } else if (data.status === 'inactive') {
-                            // If backend lost it, mark error
-                            // But maybe give it a grace period? For now simplified.
-                            setDownloads(prev => prev.map(d =>
-                                d.id === item.id ? { ...d, status: 'error', error: "任务连接中断" } : d
-                            ));
-                        }
-                    }
-                } catch (e) {
-                    console.error("Poll failed", e);
-                }
-            }
-        }, 2000);
-
-        return () => clearInterval(interval);
-    }, [downloads]);
-
-    const startActualDownload = async (item: DownloadItem) => {
-        // Mark as downloading IMMEDIATELY to prevent double-pick by effect
-        updateDownload(item.id, { status: 'downloading' });
+    const process_download = useCallback(async (item: DownloadItem) => {
+        set_downloads(prev => prev.map(d => d.id === item.id ? { ...d, status: 'downloading' } : d));
 
         try {
-            const res = await fetch("/api/download", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    videoId: item.id,
-                    title: item.title,
-                    channelName: item.channelName,
-                }),
+            await invoke('download_video', {
+                video_id: item.id,
+                title: item.title,
+                channel_name: item.channel_name,
+                thumbnail: item.thumbnail
             });
-
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                updateDownload(item.id, { status: 'error', error: data.error || `Download failed: ${res.status}` });
-                return;
-            }
-
-            const data = await res.json();
-            // Store the file path
-            // Note: status might still be downloading until poll confirms 'completed' or we set it here if synchronous (it's not)
-            // Actually the API returns success=true immediately upon Spawn.
-            // So we just keep it as 'downloading'. status update will come from Poll.
-            updateDownload(item.id, { path: data.path });
-
-        } catch (error: any) {
-            updateDownload(item.id, { status: 'error', error: error.message || "Unknown error" });
+        } catch (e: any) {
+            set_downloads(prev => prev.map(d =>
+                d.id === item.id ? { ...d, status: 'error', error: e.toString() } : d
+            ));
         }
-    };
+    }, []);
 
-    const startDownload = async (video: { id: string; title: string; thumbnail: string | null; channelName: string; channelId?: string }) => {
-        setDownloads(prev => {
+    const start_download = useCallback(async (video: { id: string; title: string; thumbnail: string | null; channel_name: string; channel_id?: string }) => {
+        if (!is_activated) {
+            await show_alert("软件未激活，无法下载视频。\n请前往 [设置 -> 软件激活] 进行激活。", "提示", "warning");
+            return;
+        }
+        if (!settings?.download_path) {
+            await show_alert("检测到未配置下载地址。\n\n请前往 [系统设置 -> 常规设置] 配置视频下载路径。", "配置错误", "error");
+            return;
+        }
+
+        set_downloads(prev => {
             if (prev.some(d => d.id === video.id && (d.status === 'downloading' || d.status === 'queued'))) {
                 return prev;
             }
-            // Remove old completed/error of same ID
             const filtered = prev.filter(d => d.id !== video.id);
             const newItem: DownloadItem = {
                 id: video.id,
@@ -174,85 +171,97 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
                 thumbnail: video.thumbnail,
                 status: 'queued',
                 progress: 0,
-                startTime: new Date(),
-                channelName: video.channelName,
-                channelId: video.channelId
+                start_time: new Date(),
+                channel_name: video.channel_name,
+                channel_id: video.channel_id
             };
             return [newItem, ...filtered];
         });
-    };
+    }, [is_activated, settings?.download_path]);
 
-    const queueDownloads = (videos: { id: string; title: string; thumbnail: string | null; channelName: string; channelId?: string }[]) => {
-        setDownloads(prev => {
-            const newItems: DownloadItem[] = [];
+    const queue_downloads = useCallback(async (videos: { id: string; title: string; thumbnail: string | null; channel_name: string; channel_id?: string }[]) => {
+        if (!is_activated) {
+            await show_alert("软件未激活，无法下载视频。\n请前往 [设置 -> 软件激活] 进行激活。", "提示", "warning");
+            return;
+        }
+        if (!settings?.download_path) {
+            await show_alert("检测到未配置下载地址。\n\n请前往 [系统设置 -> 常规设置] 配置视频下载路径。", "配置错误", "error");
+            return;
+        }
+        set_downloads(prev => {
+            const new_items: DownloadItem[] = [];
             for (const v of videos) {
-                if (prev.some(d => d.id === v.id && (d.status === 'downloading' || d.status === 'queued'))) {
-                    continue;
-                }
-                // Check if already in newItems to avoid duplicates in same batch
-                if (newItems.some(d => d.id === v.id)) continue;
+                if (prev.some(d => d.id === v.id && (d.status === 'downloading' || d.status === 'queued'))) continue;
+                if (new_items.some(d => d.id === v.id)) continue;
 
-                newItems.push({
+                new_items.push({
                     id: v.id,
                     title: v.title,
                     thumbnail: v.thumbnail,
                     status: 'queued',
                     progress: 0,
-                    startTime: new Date(),
-                    channelName: v.channelName,
-                    channelId: v.channelId
+                    start_time: new Date(),
+                    channel_name: v.channel_name,
+                    channel_id: v.channel_id
                 });
             }
-
-            // Remove old completed/errors for these IDs
-            const newIds = new Set(newItems.map(i => i.id));
-            const filtered = prev.filter(d => !newIds.has(d.id));
-
-            return [...newItems, ...filtered];
+            const new_ids = new Set(new_items.map(i => i.id));
+            const filtered = prev.filter(d => !new_ids.has(d.id));
+            return [...new_items, ...filtered];
         });
-    };
+    }, [is_activated, settings?.download_path]);
 
-    const retryDownload = async (id: string) => {
-        const item = downloads.find(d => d.id === id);
-        if (item) {
-            setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'queued', progress: 0, error: undefined } : d));
+    const retry_download = useCallback(async (id: string) => {
+        if (!settings?.download_path) {
+            await show_alert("检测到未配置下载地址。\n\n请前往 [系统设置 -> 常规设置] 配置视频下载路径。", "配置错误", "error");
+            return;
         }
-    };
+        set_downloads(prev => prev.map(d => d.id === id ? { ...d, status: 'queued', progress: 0, error: undefined } : d));
+    }, [settings?.download_path]);
 
-    const retryAllFailed = () => {
-        setDownloads(prev => prev.map(d =>
+    const retry_all_failed = useCallback(() => {
+        set_downloads(prev => prev.map(d =>
             d.status === 'error'
-                ? { ...d, status: 'queued', progress: 0, error: undefined, startTime: new Date() }
+                ? { ...d, status: 'queued', progress: 0, error: undefined, start_time: new Date() }
                 : d
         ));
-    };
+    }, []);
 
-    const removeDownload = (id: string) => {
-        setDownloads(prev => prev.filter(d => d.id !== id));
-    };
+    const cancel_download = useCallback(async (id: string) => {
+        try {
+            await invoke('cancel_download', { video_id: id });
+        } catch (e: any) {
+            // Silently ignore "not found" errors as they just mean the backend is already clean
+            if (!e.toString().includes("Download not found")) {
+                console.error("Cancel failed", e);
+            }
+        }
+        set_downloads(prev => prev.map(d => d.id === id ? { ...d, status: 'error', error: "Cancelled by user" } : d));
+    }, []);
 
-    const clearHistory = () => {
-        if (!confirm("确定要清空所有已完成和失败的下载记录吗？\n(正在进行的任务不会被清除)")) return;
-        setDownloads(prev => prev.filter(d => d.status === 'downloading' || d.status === 'queued'));
-    };
+    const remove_download = useCallback(async (id: string) => {
+        const item = downloads.find(d => d.id === id);
+        if (item && item.status === 'downloading') {
+            await cancel_download(id);
+        }
+        set_downloads(prev => prev.filter(d => d.id !== id));
+    }, [cancel_download, downloads]);
 
-    const restoreHistory = (items: any[]) => {
-        setDownloads(prev => {
-            // Merge restored items, avoiding duplicates
-            const existingIds = new Set(prev.map(d => d.id));
-            const newItems = items
-                .filter(item => !existingIds.has(item.id))
-                .map(item => ({
-                    ...item,
-                    startTime: new Date(item.startTime || Date.now())
-                }));
-
-            return [...prev, ...newItems].sort((a, b) => b.startTime.getTime() - a.startTime.getTime());
+    const clear_history = useCallback(() => {
+        set_downloads(prev => {
+            const filtered = prev.filter(d => d.status === 'downloading' || d.status === 'queued');
+            return [...filtered];
         });
-    };
+    }, []);
+
+    const value = useMemo(() => ({
+        downloads, start_download, retry_download, retry_all_failed,
+        remove_download, queue_downloads, clear_history,
+        cancel_download
+    }), [downloads, start_download, retry_download, retry_all_failed, remove_download, queue_downloads, clear_history, cancel_download]);
 
     return (
-        <DownloadContext.Provider value={{ downloads, startDownload, retryDownload, retryAllFailed, removeDownload, queueDownloads, clearHistory, restoreHistory }}>
+        <DownloadContext.Provider value={value}>
             {children}
         </DownloadContext.Provider>
     );
@@ -265,4 +274,3 @@ export function useDownloads() {
     }
     return context;
 }
-

@@ -2,114 +2,40 @@
     "name": "youtube-monitor",
     "version": "1.0.0",
     "private": true,
-    "main": "electron/main.js",
     "scripts": {
         "dev": "next dev",
         "build": "next build",
         "start": "next start",
         "lint": "next lint",
-        "electron": "electron ./electron/main.js",
-        "electron-dev": "concurrently -k \"cross-env BROWSER=none npm run dev\" \"electron ./electron/main.js\"",
-        "dist": "rm -rf .next release standalone_package && npx prisma generate && npm run build && npm run copy-standalone && electron-builder",
-        "dist:win": "rm -rf .next standalone_package && npx prisma generate && npm run build && cross-env BUILD_PLATFORM=win npm run copy-standalone && electron-builder --win --x64",
-        "copy-standalone": "node prepare_standalone.js"
-    },
-    "build": {
-        "appId": "com.youtube.monitor",
-        "productName": "YouTubeMonitor",
-        "files": [
-            "electron/**/*",
-            "package.json",
-            "!release/**/*"
-        ],
-        "extraResources": [
-            {
-                "from": "standalone_package",
-                "to": "standalone",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
-                "from": "prisma/empty.db",
-                "to": "prisma/dev.db"
-            },
-            {
-                "from": "prisma/schema.prisma",
-                "to": "prisma/schema.prisma"
-            }
-        ],
-        "directories": {
-            "output": "release"
-        },
-        "mac": {
-            "target": {
-                "target": "dmg",
-                "arch": [
-                    "arm64"
-                ]
-            },
-            "category": "public.app-category.utilities",
-            "icon": "resources/icon.png",
-            "extraResources": [
-                {
-                    "from": "resources/bin",
-                    "to": "bin",
-                    "filter": [
-                        "!*.exe"
-                    ]
-                }
-            ],
-            "binaries": [
-                "./resources/bin/yt-dlp",
-                "./resources/bin/ffmpeg",
-                "./resources/bin/ffprobe"
-            ]
-        },
-        "win": {
-            "target": [
-                "portable",
-                "dir"
-            ],
-            "icon": "resources/icon.png",
-            "extraResources": [
-                {
-                    "from": "resources/bin",
-                    "to": "bin",
-                    "filter": [
-                        "*.exe"
-                    ]
-                }
-            ]
-        }
+        "tauri": "tauri",
+        "tauri:dev": "tauri dev",
+        "tauri:build": "tauri build"
     },
     "dependencies": {
-        "@prisma/client": "^5.22.0",
-        "@types/lodash": "^4.17.21",
+        "@tauri-apps/api": "^2.9.1",
+        "@tauri-apps/plugin-dialog": "^2.6.0",
         "clsx": "latest",
         "date-fns": "latest",
-        "lodash": "^4.17.21",
         "lucide-react": "latest",
         "next": "latest",
         "react": "latest",
         "react-dom": "latest",
+        "react-virtuoso": "^4.18.1",
         "recharts": "^3.6.0",
         "tailwind-merge": "latest",
         "undici": "^7.16.0"
     },
     "devDependencies": {
+        "@tauri-apps/cli": "^2.9.6",
         "@types/node": "^25.0.3",
         "@types/react": "latest",
         "@types/react-dom": "latest",
         "autoprefixer": "^10.4.16",
         "concurrently": "^9.2.1",
         "cross-env": "^10.1.0",
-        "electron": "^39.2.7",
-        "electron-builder": "latest",
         "eslint": "latest",
         "eslint-config-next": "latest",
         "postcss": "^8",
-        "prisma": "^5.22.0",
         "tailwindcss": "^3.4.1",
         "typescript": "latest"
     }

@@ -1,0 +1,1 @@
+ALTER TABLE settings ADD COLUMN license_days INTEGER DEFAULT 365;

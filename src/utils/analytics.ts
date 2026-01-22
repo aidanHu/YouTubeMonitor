@@ -1,33 +1,33 @@
 export interface VideoMetrics {
     vph: number;
     er: number;
-    zScore: number;
+    z_score: number;
     multiplier: number;
     label: "Viral" | "High" | "Normal" | "Low" | "Tanked";
 }
 
-export function calculateVPH(publishedAt: string | Date, viewCount: number | bigint): number {
-    const published = new Date(publishedAt);
+export function calculateVPH(published_at: string | Date, view_count: number | bigint): number {
+    const published = new Date(published_at);
     const now = new Date();
     const hoursSincePublish = (now.getTime() - published.getTime()) / (1000 * 60 * 60);
 
     // Avoid division by zero or negative time
-    if (hoursSincePublish < 1) return Number(viewCount);
+    if (hoursSincePublish < 1) return Number(view_count);
 
-    return Number(viewCount) / hoursSincePublish;
+    return Number(view_count) / hoursSincePublish;
 }
 
 export function calculateER(likes: number | null, comments: number | null, views: number | bigint): number {
     const totalEngagements = (likes || 0) + (comments || 0);
-    const viewCount = Number(views);
+    const view_count = Number(views);
 
-    if (viewCount === 0) return 0;
+    if (view_count === 0) return 0;
 
-    return (totalEngagements / viewCount) * 100;
+    return (totalEngagements / view_count) * 100;
 }
 
-export function calculateChannelStats(videos: { viewCount: string | bigint | number }[]) {
-    const views = videos.map(v => Number(v.viewCount));
+export function calculateChannelStats(videos: { view_count: string | bigint | number }[]) {
+    const views = videos.map(v => Number(v.view_count));
     if (views.length === 0) return { mean: 0, stdDev: 0 };
 
     const sum = views.reduce((a, b) => a + b, 0);
@@ -41,25 +41,25 @@ export function calculateChannelStats(videos: { viewCount: string | bigint | num
 }
 
 export function analyzeVideo(
-    video: { viewCount: string | bigint | number, likeCount: number | null, commentCount: number | null, publishedAt: string | Date },
+    video: { view_count: string | bigint | number, like_count: number | null, comment_count: number | null, published_at: string | Date },
     channelStats: { mean: number, stdDev: number }
 ): VideoMetrics {
-    const views = Number(video.viewCount);
-    const vph = calculateVPH(video.publishedAt, views);
-    const er = calculateER(video.likeCount, video.commentCount, views);
+    const views = Number(video.view_count);
+    const vph = calculateVPH(video.published_at, views);
+    const er = calculateER(video.like_count, video.comment_count, views);
 
-    let zScore = 0;
+    let z_score = 0;
     if (channelStats.stdDev > 0) {
-        zScore = (views - channelStats.mean) / channelStats.stdDev;
+        z_score = (views - channelStats.mean) / channelStats.stdDev;
     }
 
     const multiplier = channelStats.mean > 0 ? views / channelStats.mean : 0;
 
     let label: VideoMetrics["label"] = "Normal";
-    if (zScore > 2 || multiplier > 2.5) label = "Viral";
-    else if (zScore > 1) label = "High";
-    else if (zScore < -1.5 || multiplier < 0.3) label = "Tanked";
-    else if (zScore < -0.5) label = "Low";
+    if (z_score > 2 || multiplier > 2.5) label = "Viral";
+    else if (z_score > 1) label = "High";
+    else if (z_score < -1.5 || multiplier < 0.3) label = "Tanked";
+    else if (z_score < -0.5) label = "Low";
 
-    return { vph, er, zScore, multiplier, label };
+    return { vph, er, z_score, multiplier, label };
 }

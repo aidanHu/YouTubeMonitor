@@ -1,14 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-    output: 'standalone',
-    // Disable linting during build to avoid failing on minor issues
-    // eslint config is ignored by next build in recent versions if placed here, 
-    // but we can rely on standard ignore builds. 
-    // Actually, simply removing it as it's invalid.
+    output: 'export',
+    images: {
+        unoptimized: true,
+    },
     typescript: {
         ignoreBuildErrors: true,
     },
-    serverExternalPackages: ['@prisma/client'],
+    // serverExternalPackages removed as we are not running a node server
 };
 
 module.exports = nextConfig;

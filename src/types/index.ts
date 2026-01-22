@@ -1,7 +1,9 @@
 export interface Group {
     id: number;
     name: string;
-    isPinned: boolean;
+    is_pinned: boolean;
+    created_at: string;
+    updated_at: string;
 }
 
 export interface Channel {
@@ -9,25 +11,25 @@ export interface Channel {
     url: string;
     name: string;
     thumbnail: string | null;
-    subscriberCount: number;
-    viewCount: string; // Serialized BigInt
-    videoCount: number;
-    groupId: number | null;
+    subscriber_count: number;
+    view_count: string; // Serialized BigInt
+    video_count: number;
+    group_id: number | null;
     group?: Group;
-    isFavorite: boolean;
-    isPinned: boolean;
-    createdAt: string | Date;
-    lastUploadAt?: string | Date; // Optional as older channels might not have it yet
+    is_favorite: boolean;
+    is_pinned: boolean;
+    created_at: string | Date;
+    last_upload_at?: string | Date; // Optional as older channels might not have it yet
 }
 
 export interface ApiKey {
     id: number;
     key: string;
     name: string | null;
-    isActive: boolean;
-    usageToday: number;
-    lastUsed: string;
-    createdAt: string;
+    is_active: boolean;
+    usage_today: number;
+    last_used: string;
+    created_at: string;
 }
 
 export interface Video {
@@ -35,17 +37,17 @@ export interface Video {
     title: string;
     url: string;
     thumbnail: string | null;
-    publishedAt: string | Date;
-    viewCount: string;
-    likeCount: number | null;
-    commentCount: number | null;
-    isShort: boolean;
-    isFavorite: boolean;
-    channelId: string;
+    published_at: string | Date;
+    view_count: string;
+    like_count: number | null;
+    comment_count: number | null;
+    is_short: boolean;
+    is_favorite: boolean;
+    channel_id: string;
     channel?: Channel;
     // Analysis fields
-    engagementRate?: number;
+    engagement_rate?: number;
     ratio?: number;
-    subCount?: number;
-    localPath?: string | null;
+    sub_count?: number;
+    local_path?: string | null;
 }

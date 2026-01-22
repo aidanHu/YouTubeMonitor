@@ -1,274 +1,275 @@
-"use client";
-
 import { Channel } from "@/types";
-import { ExternalLink, Users, Video, Eye, Trash2, FolderInput, RefreshCw, Heart, DownloadCloud, Copy, Check, MoreHorizontal, Pin, Clock } from "lucide-react";
+import { MoreVertical, Trash2, FolderInput, RefreshCw, Heart, Pin, Users, Copy, ExternalLink, Download, Clock } from "lucide-react";
+import { useState, memo } from "react";
+import { formatDistanceToNow } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import Link from "next/link";
-import { useState } from "react";
 import { useDownloads } from "@/context/DownloadContext";
+import { invoke } from "@tauri-apps/api/core";
+import { show_alert, show_confirm } from "@/lib/dialogs";
 
 interface ChannelCardProps {
     channel: Channel;
-    onDelete?: (id: string, name: string) => void;
-    onMove?: (id: string, name: string, currentGroupId: number | null) => void;
-    onRefresh?: () => Promise<void>;
-    onToggleFavorite?: (id: string, isFavorite: boolean) => Promise<void>;
-    onTogglePin?: (id: string, isPinned: boolean) => Promise<void>;
+    on_delete: (id: string, name: string) => Promise<void>;
+    on_move: (id: string, name: string, currentGroupId: number | null) => void;
+    on_toggle_favorite: (id: string, is_favorite: boolean) => Promise<void>;
+    on_toggle_pin: (id: string, is_pinned: boolean) => Promise<void>;
+    on_refresh: () => Promise<void>;
 }
 
-export function ChannelCard({ channel, onDelete, onMove, onRefresh, onToggleFavorite, onTogglePin }: ChannelCardProps) {
-    const [isRefreshing, setIsRefreshing] = useState(false);
-    const [isDownloadingAll, setIsDownloadingAll] = useState(false);
-    const [isCopied, setIsCopied] = useState(false);
-    const { queueDownloads } = useDownloads();
+export const ChannelCard = memo(function ChannelCard({
+    channel,
+    on_delete,
+    on_move,
+    on_toggle_favorite,
+    on_toggle_pin,
+    on_refresh
+}: ChannelCardProps) {
+    const [is_menu_open, set_is_menu_open] = useState(false);
+    const [refreshing, set_refreshing] = useState(false);
+    const [downloadingAll, set_downloading_all] = useState(false);
+    const { queue_downloads } = useDownloads();
 
-    const handleRefresh = async (e: React.MouseEvent) => {
+    const handle_refresh = async (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        if (!onRefresh) return;
-
-        setIsRefreshing(true);
-        try {
-            await onRefresh();
-        } finally {
-            setIsRefreshing(false);
-        }
+        set_refreshing(true);
+        await on_refresh();
+        set_refreshing(false);
     };
 
-    const handleDownloadAll = async (e: React.MouseEvent) => {
+    const handle_copy_link = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
+        navigator.clipboard.writeText(channel.url);
+        set_is_menu_open(false);
+    };
 
-        if (confirm(`确定要将 "${channel.name}" 的所有视频加入下载队列吗？\n(请确保已刷新该频道以获取最新视频列表)`)) {
-            setIsDownloadingAll(true);
+    const handle_open_home = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        await invoke('open_url', { url: channel.url });
+        set_is_menu_open(false);
+    };
+
+    const handle_download_all = async (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        set_is_menu_open(false);
+
+        if (await show_confirm(`确定要将 "${channel.name}" 的所有视频加入下载队列吗？`)) {
+            set_downloading_all(true);
             try {
                 // Fetch full channel details including videos
-                const res = await fetch(`/api/channels/${channel.id}`);
-                const data = await res.json();
-
-                if (data.videos && data.videos.length > 0) {
-                    const downloadItems = data.videos.map((v: any) => ({
+                const details: any = await invoke('get_channel_details', { id: channel.id });
+                if (details && details.videos && details.videos.length > 0) {
+                    const downloadItems = details.videos.map((v: any) => ({
                         id: v.id,
                         title: v.title,
                         thumbnail: v.thumbnail,
-                        channelName: channel.name
+                        channel_name: channel.name,
+                        channel_id: channel.id
                     }));
-                    queueDownloads(downloadItems);
-                    // Optional: Show a toast? For now just button state
+                    queue_downloads(downloadItems);
+                    await show_alert(`已将 ${details.videos.length} 个视频加入下载队列。`);
                 } else {
-                    alert("未找到该频道的视频数据，请先尝试刷新数据。");
+                    await show_alert("该频道包含的视频数量为 0。");
                 }
-            } catch (err) {
-                console.error("Failed to fetch channel videos", err);
-                alert("获取视频列表失败");
+            } catch (error: any) {
+                console.error("Failed to fetch channel details for download", error);
+                await show_alert("获取频道视频失败: " + error.toString());
             } finally {
-                setIsDownloadingAll(false);
+                set_downloading_all(false);
             }
         }
     };
 
+    const formatNumber = (num: number | string | bigint) => {
+        const n = Number(num);
+        if (n >= 100000000) return (n / 100000000).toFixed(1) + '亿';
+        if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+        return n.toLocaleString();
+    };
+
     return (
-        <Link href={`/channel/${channel.id}`}>
-            <div className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 hover:shadow-lg hover:border-blue-500/30 transition-all cursor-pointer h-full flex flex-col justify-between relative">
-                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 flex gap-1">
-                    {/* Primary Actions: Pin, Favorite & Refresh */}
-                    {onTogglePin && (
-                        <button
-                            onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                onTogglePin(channel.id, !channel.isPinned);
-                            }}
-                            className={`p-1.5 rounded-lg transition-colors ${channel.isPinned
-                                ? "bg-blue-50 dark:bg-blue-900/20 text-blue-500 hover:bg-blue-100"
-                                : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:text-blue-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-                                }`}
-                            title={channel.isPinned ? "取消置顶" : "置顶频道"}
-                        >
-                            <Pin size={14} fill={channel.isPinned ? "currentColor" : "none"} />
-                        </button>
-                    )}
+        <div className="group relative bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:shadow-lg transition-all duration-300 flex flex-col h-full">
+            {/* Top Action Bar (Absolute) */}
+            <div className={`absolute top-2 right-2 z-20 flex items-center gap-1 transition-opacity ${is_menu_open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                <button
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        on_toggle_pin(channel.id, !channel.is_pinned);
+                    }}
+                    className={`p-1.5 rounded-lg backdrop-blur-sm transition-colors ${channel.is_pinned
+                        ? "bg-blue-500/10 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400"
+                        : "bg-white/80 dark:bg-black/50 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                        }`}
+                    title={channel.is_pinned ? "取消置顶" : "置顶频道"}
+                >
+                    <Pin size={14} className={channel.is_pinned ? "fill-current" : ""} />
+                </button>
+                <button
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        on_toggle_favorite(channel.id, !channel.is_favorite);
+                    }}
+                    className={`p-1.5 rounded-lg backdrop-blur-sm transition-colors ${channel.is_favorite
+                        ? "bg-red-500/10 text-red-600 dark:bg-red-500/20 dark:text-red-400"
+                        : "bg-white/80 dark:bg-black/50 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                        }`}
+                    title={channel.is_favorite ? "取消收藏" : "收藏频道"}
+                >
+                    <Heart size={14} className={channel.is_favorite ? "fill-current" : ""} />
+                </button>
+                <button
+                    onClick={handle_refresh}
+                    className="p-1.5 rounded-lg bg-white/80 dark:bg-black/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 backdrop-blur-sm transition-colors"
+                    title="刷新数据"
+                >
+                    <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} />
+                </button>
 
-                    {onToggleFavorite && (
-                        <button
-                            onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                onToggleFavorite(channel.id, !channel.isFavorite);
-                            }}
-                            className={`p-1.5 rounded-lg transition-colors ${channel.isFavorite
-                                ? "bg-pink-50 dark:bg-pink-900/20 text-pink-500 hover:bg-pink-100"
-                                : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:text-pink-500 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-                                }`}
-                            title={channel.isFavorite ? "取消收藏" : "收藏频道"}
-                        >
-                            <Heart size={14} fill={channel.isFavorite ? "currentColor" : "none"} />
-                        </button>
-                    )}
+                <div className="relative">
+                    <button
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            set_is_menu_open(!is_menu_open);
+                        }}
+                        className={`p-1.5 rounded-lg backdrop-blur-sm transition-colors ${is_menu_open
+                            ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                            : "bg-white/80 dark:bg-black/50 text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                            }`}
+                    >
+                        <MoreVertical size={14} />
+                    </button>
 
-                    {onRefresh && (
-                        <button
-                            onClick={handleRefresh}
-                            disabled={isRefreshing}
-                            className={`p-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:text-zinc-600 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors ${isRefreshing ? "animate-spin" : ""}`}
-                            title="刷新数据"
-                        >
-                            <RefreshCw size={14} />
-                        </button>
-                    )}
-
-                    {/* Secondary Actions Menu */}
-                    <div className="relative group/menu">
-                        <button
-                            onClick={(e) => e.preventDefault()}
-                            className="p-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:text-zinc-600 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
-                            title="更多操作"
-                        >
-                            <MoreHorizontal size={14} />
-                        </button>
-
-                        {/* Dropdown Content */}
-                        <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl overflow-hidden hidden group-hover/menu:block z-20">
-                            <div className="flex flex-col p-1">
+                    {/* Dropdown Menu */}
+                    {is_menu_open && (
+                        <>
+                            <div
+                                className="fixed inset-0 z-10"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    set_is_menu_open(false);
+                                }}
+                            />
+                            <div className="absolute right-0 top-full mt-1 w-32 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl z-30 py-1 flex flex-col text-xs font-medium overflow-hidden">
                                 <button
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        navigator.clipboard.writeText(channel.url);
-                                        setIsCopied(true);
-                                        setTimeout(() => setIsCopied(false), 2000);
-                                    }}
-                                    className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded text-left w-full"
+                                    onClick={handle_copy_link}
+                                    className="px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-700/50 flex items-center gap-2 text-zinc-700 dark:text-zinc-300"
                                 >
-                                    {isCopied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
-                                    {isCopied ? "已复制" : "复制链接"}
+                                    <Copy size={14} />
+                                    复制链接
                                 </button>
                                 <button
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        window.open(channel.url, '_blank', 'noopener,noreferrer');
-                                    }}
-                                    className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded text-left w-full"
+                                    onClick={handle_open_home}
+                                    className="px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-700/50 flex items-center gap-2 text-zinc-700 dark:text-zinc-300"
                                 >
-                                    <ExternalLink size={12} />
+                                    <ExternalLink size={14} />
                                     打开主页
                                 </button>
+                                <div className="h-px bg-zinc-100 dark:bg-zinc-700 my-1" />
                                 <button
-                                    onClick={handleDownloadAll}
-                                    disabled={isDownloadingAll}
-                                    className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded text-left w-full"
+                                    onClick={handle_download_all}
+                                    className="px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-700/50 flex items-center gap-2 text-zinc-700 dark:text-zinc-300"
                                 >
-                                    <DownloadCloud size={12} />
-                                    下载全部
+                                    <Download size={14} className={downloadingAll ? "animate-pulse" : ""} />
+                                    {downloadingAll ? "添加中..." : "下载全部"}
                                 </button>
-                                {onMove && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            onMove(channel.id, channel.name, channel.groupId);
-                                        }}
-                                        className="flex items-center gap-2 px-2 py-1.5 text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded text-left w-full"
-                                    >
-                                        <FolderInput size={12} />
-                                        移动分组
-                                    </button>
-                                )}
-                                {onDelete && (
-                                    <button
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            onDelete(channel.id, channel.name);
-                                        }}
-                                        className="flex items-center gap-2 px-2 py-1.5 text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-left w-full"
-                                    >
-                                        <Trash2 size={12} />
-                                        删除频道
-                                    </button>
-                                )}
+                                <button
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        set_is_menu_open(false);
+                                        on_move(channel.id, channel.name, channel.group_id || null);
+                                    }}
+                                    className="px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-700/50 flex items-center gap-2 text-zinc-700 dark:text-zinc-300"
+                                >
+                                    <FolderInput size={14} />
+                                    移动分组
+                                </button>
+                                <div className="h-px bg-zinc-100 dark:bg-zinc-700 my-1" />
+                                <button
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        set_is_menu_open(false);
+                                        on_delete(channel.id, channel.name);
+                                    }}
+                                    className="px-3 py-2 text-left hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2 text-red-600 dark:text-red-400"
+                                >
+                                    <Trash2 size={14} />
+                                    删除频道
+                                </button>
                             </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex items-start justify-between mb-4 mt-2">
-                    <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-full bg-zinc-200 dark:bg-zinc-800 shrink-0 overflow-hidden relative border border-zinc-100 dark:border-zinc-700">
-                            {/* Thumbnail placeholder */}
-                            {channel.thumbnail ? (
-                                <img src={channel.thumbnail} alt={channel.name} className="w-full h-full object-cover" />
-                            ) : (
-                                <div className="flex items-center justify-center w-full h-full text-zinc-400 text-xs">IMG</div>
-                            )}
-                            {channel.isPinned && (
-                                <div className="absolute -top-1 -right-1 bg-blue-500 rounded-full p-0.5 border-2 border-white dark:border-zinc-900">
-                                    <svg width="8" height="8" viewBox="0 0 24 24" fill="white" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg>
-                                </div>
-                            )}
-                        </div>
-                        <div>
-                            <h3 className="font-semibold text-zinc-900 dark:text-zinc-100 line-clamp-1 break-all flex items-center gap-1" title={channel.name}>
-                                {channel.name}
-                            </h3>
-                            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                                {channel.group?.name || "未分类"}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 py-3 border-t border-zinc-100 dark:border-zinc-800 mt-2">
-                    <div className="text-center">
-                        <div className="flex items-center justify-center gap-1 text-xs text-zinc-500 mb-1">
-                            <Users size={12} /> 订阅
-                        </div>
-                        <div className="font-mono text-sm font-medium">
-                            {new Intl.NumberFormat('en-US', { notation: "compact" }).format(channel.subscriberCount)}
-                        </div>
-                    </div>
-                    <div className="text-center border-l border-zinc-100 dark:border-zinc-800">
-                        <div className="flex items-center justify-center gap-1 text-xs text-zinc-500 mb-1">
-                            <Eye size={12} /> 观看
-                        </div>
-                        <div className="font-mono text-sm font-medium">
-                            {new Intl.NumberFormat('en-US', { notation: "compact" }).format(typeof channel.viewCount === 'string' ? parseInt(channel.viewCount) : Number(channel.viewCount))}
-                        </div>
-                    </div>
-                    <div className="text-center border-l border-zinc-100 dark:border-zinc-800">
-                        <div className="flex items-center justify-center gap-1 text-xs text-zinc-500 mb-1">
-                            <Video size={12} /> 视频
-                        </div>
-                        <div className="font-mono text-sm font-medium">
-                            {channel.videoCount}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex items-center justify-between text-xs text-zinc-400 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-1">
-                    <div className="flex items-center gap-1" title={channel.lastUploadAt ? new Date(channel.lastUploadAt).toLocaleString() : "暂无数据，请刷新"}>
-                        <Clock size={12} />
-                        <span>
-                            {channel.lastUploadAt ? (() => {
-                                const diff = new Date().getTime() - new Date(channel.lastUploadAt).getTime();
-                                const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-                                if (days === 0) return "今天更新";
-                                if (days === 1) return "昨天更新";
-                                if (days < 365) return `${days}天前更新`;
-                                return `${Math.floor(days / 365)}年前更新`;
-                            })() : "无记录 (请刷新)"}
-                        </span>
-                    </div>
-                    {channel.lastUploadAt && (new Date().getTime() - new Date(channel.lastUploadAt).getTime() > 1000 * 60 * 60 * 24 * 30) && (
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${(new Date().getTime() - new Date(channel.lastUploadAt).getTime() > 1000 * 60 * 60 * 24 * 90)
-                            ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400"
-                            : "bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400"
-                            }`}>
-                            {(new Date().getTime() - new Date(channel.lastUploadAt).getTime() > 1000 * 60 * 60 * 24 * 90) ? "长期停更" : "近期停更"}
-                        </span>
+                        </>
                     )}
                 </div>
             </div>
-        </Link>
+
+            {/* Pinned/Favorite Indicators (Always Visible if true) */}
+            {(channel.is_pinned || channel.is_favorite) && (
+                <div className="absolute top-2 left-2 z-10 flex gap-1">
+                    {channel.is_pinned && (
+                        <div className="bg-blue-500 text-white p-1 rounded-md shadow-sm">
+                            <Pin size={10} fill="currentColor" />
+                        </div>
+                    )}
+                    {channel.is_favorite && (
+                        <div className="bg-red-500 text-white p-1 rounded-md shadow-sm">
+                            <Heart size={10} fill="currentColor" />
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Content Link */}
+            <Link href={`/channel?id=${channel.id}`} className="flex flex-col h-full p-4">
+                {/* Header: Avatar & Name */}
+                <div className="flex flex-col items-center text-center mb-4">
+                    <div className="w-16 h-16 rounded-full overflow-hidden bg-zinc-100 dark:bg-zinc-800 border-2 border-white dark:border-zinc-700 shadow-sm mb-3 shrink-0">
+                        {channel.thumbnail ? (
+                            <img src={channel.thumbnail} alt={channel.name} className="w-full h-full object-cover" loading="lazy" />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center text-zinc-300">
+                                <Users size={24} />
+                            </div>
+                        )}
+                    </div>
+                    <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100 line-clamp-1 w-full" title={channel.name}>
+                        {channel.name}
+                    </h3>
+                    <div className="flex items-center gap-1 text-xs text-zinc-500 mt-1">
+                        <Users size={12} />
+                        <span>{formatNumber(channel.subscriber_count)} 订阅</span>
+                    </div>
+                    {channel.last_upload_at && (
+                        <div className="flex items-center gap-1 text-xs text-zinc-400 mt-1">
+                            <Clock size={12} />
+                            <span>更新于 {formatDistanceToNow(new Date(channel.last_upload_at), { addSuffix: true, locale: zhCN })}</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Stats Grid */}
+                <div className="mt-auto grid grid-cols-2 gap-2">
+                    <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-lg p-2 flex flex-col items-center justify-center text-center">
+                        <span className="text-[10px] text-zinc-500 uppercase font-bold mb-0.5">视频</span>
+                        <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 font-mono">
+                            {formatNumber(channel.video_count)}
+                        </span>
+                    </div>
+                    <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-lg p-2 flex flex-col items-center justify-center text-center">
+                        <span className="text-[10px] text-zinc-500 uppercase font-bold mb-0.5">播放</span>
+                        <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 font-mono">
+                            {formatNumber(channel.view_count)}
+                        </span>
+                    </div>
+                </div>
+            </Link>
+        </div>
     );
-}
+});

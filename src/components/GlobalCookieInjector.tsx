@@ -2,17 +2,26 @@
 "use client";
 
 import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 export function GlobalCookieInjector() {
     useEffect(() => {
-        // Try to inject cookies if available (Electron only)
-        if (typeof window !== 'undefined' && 'electron' in window) {
-            console.log("GlobalCookieInjector: Initializing...");
-            (window as any).electron.refreshCookies().then((res: any) => {
-                if (res?.count) console.log(`GlobalCookieInjector: Injected ${res.count} cookies globally.`);
-            }).catch((err: any) => {
-                console.error("GlobalCookieInjector: Failed to inject cookies", err);
-            });
+        // Identify environment
+        const is_tauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+
+        if (is_tauri) {
+            console.log("GlobalCookieInjector: Initializing (Native)...");
+            invoke("refresh_cookies")
+                .then((res: any) => {
+                    if (res?.success && res.count) {
+                        console.log(`GlobalCookieInjector: Parsed ${res.count} cookies successfully.`);
+                    } else if (res?.message) {
+                        console.log("GlobalCookieInjector:", res.message);
+                    }
+                })
+                .catch((err) => {
+                    console.error("GlobalCookieInjector: Failed to load cookies", err);
+                });
         }
     }, []);
 
