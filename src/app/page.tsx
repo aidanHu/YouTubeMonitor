@@ -40,7 +40,10 @@ export default function Home() {
         sort_order, set_sort_order,
         filter_type, set_filter_type,
         date_range, set_date_range,
-        search_query, set_search_query
+        search_query, set_search_query,
+        inactivityFilter, set_inactivity_filter,
+        analysisDateRange, set_analysis_date_range,
+        analysisFilterType, set_analysis_filter_type
     } = useData();
     const scrollRef = useRef<HTMLElement>(null);
     const positionRef = useRef(0);
@@ -179,8 +182,7 @@ export default function Home() {
     // const [favSubTab, set_fav_sub_tab] = useState<"channels" | "videos">("channels");
 
     // Analysis Filters (Lifted State - Optional, currently local is fine or move too? Keep local for now as user asked for Dashboard Persistence)
-    const [analysisDateRange, set_analysis_date_range] = useState<"3d" | "7d" | "30d">("3d");
-    const [analysisFilterType, set_analysis_filter_type] = useState<"all" | "video" | "short">("all");
+
 
     // State for videos managed by VideoList component
     // const [videos, set_videos] = useState<any[]>([]); // Removed redundancy
@@ -274,8 +276,6 @@ export default function Home() {
     };
 
     const handle_delete_channel = async (id: string, name: string) => {
-        console.log("handle_delete_channel called for:", name, id);
-
         try {
             const { ask } = await import('@tauri-apps/plugin-dialog');
             const confirmed = await ask(`确定要删除频道 "${name}" 吗？`, {
@@ -284,13 +284,10 @@ export default function Home() {
             });
 
             if (!confirmed) {
-                console.log("Delete cancelled by user");
                 return;
             }
 
-            console.log("Invoking delete_channel for id:", id);
             await invoke('delete_channel', { id });
-            console.log("Delete success, fetching data...");
             fetch_data(false);
         } catch (e: any) {
             console.error("Delete channel error:", e);
@@ -408,8 +405,6 @@ export default function Home() {
 
             // Tauri invoke arguments should match Rust function argument names (snake_case conversion is automatic usually, but explicit is safer)
             // Rust: add_channels(pool, urls, group_id)
-            // Explicit arg mapping for safety
-            console.log("Invoking add_channels", { urls, group_id: group_id || null });
             const results = await invoke<AddResult[]>('add_channels', {
                 urls,
                 group_id: group_id || null
@@ -492,7 +487,7 @@ export default function Home() {
         }
     };
 
-    const [inactivityFilter, set_inactivity_filter] = useState<'all' | '1m' | '3m' | '6m' | '1y'>('all');
+
 
     const filteredChannels = useMemo(() => {
         return (selected_group_id

@@ -113,7 +113,6 @@ export function VideoList({
 
         // Check if cache hits
         if (video_cache.key === cacheKey && video_cache.videos.length > 0) {
-            console.log("Restoring videos from cache", video_cache.videos.length);
             set_videos(video_cache.videos);
             set_page(video_cache.page);
             set_has_more(video_cache.has_more);

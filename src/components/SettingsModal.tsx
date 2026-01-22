@@ -16,7 +16,7 @@ import { show_alert, show_confirm, show_error, show_success } from "@/lib/dialog
 
 export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
     const { refreshData, is_activated, license_status } = useData();
-    // const { restoreHistory } = useDownloads(); // Removed
+    const { cookie_status } = useDownloads();
 
     // Tabs configuration
     const tabs = [
@@ -168,7 +168,6 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
 
     const handle_save_settings = async () => {
         set_saving(true);
-        console.log("Saving Settings - State:", { proxy_url, cookie_source, download_path, max_concurrent_downloads });
         try {
             await invoke('save_settings', {
                 proxy_url: proxy_url || null,
@@ -411,7 +410,13 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
                                     <div className="p-1.5 bg-yellow-100 text-yellow-600 rounded-lg dark:bg-yellow-900/30">
                                         <Key size={14} />
                                     </div>
-                                    Cookie 设置 (解决 "Sign in" 报错)
+                                    <div className="flex items-center gap-2">
+                                        Cookie 设置 (解决 "Sign in" 报错)
+                                        {cookie_status === 'checking' && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> 检测中...</span>}
+                                        {cookie_status === 'valid' && <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded flex items-center gap-1"><CheckCircle2 size={10} /> 有效</span>}
+                                        {cookie_status === 'expired' && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded flex items-center gap-1"><XCircle size={10} /> 已失效</span>}
+                                        {cookie_status === 'unknown' && cookie_source !== 'none' && <span className="text-[10px] bg-yellow-100 text-yellow-600 px-1.5 py-0.5 rounded flex items-center gap-1"><Info size={10} /> 未检测</span>}
+                                    </div>
                                 </h3>
 
                                 <div className="space-y-3">

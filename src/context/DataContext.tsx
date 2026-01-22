@@ -53,6 +53,14 @@ interface DataContextType {
     set_date_range: (range: "all" | "3d" | "7d" | "30d") => void;
     search_query: string;
     set_search_query: (query: string) => void;
+    inactivityFilter: "all" | "1m" | "3m" | "6m" | "1y";
+    set_inactivity_filter: (filter: "all" | "1m" | "3m" | "6m" | "1y") => void;
+
+    // Analysis State
+    analysisDateRange: "3d" | "7d" | "30d";
+    set_analysis_date_range: (range: "3d" | "7d" | "30d") => void;
+    analysisFilterType: "all" | "video" | "short";
+    set_analysis_filter_type: (type: "all" | "video" | "short") => void;
 
     video_cache: {
         key: string;
@@ -89,6 +97,44 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const [filter_type, set_filter_type] = useState<"all" | "video" | "short">("all");
     const [date_range, set_date_range] = useState<"all" | "3d" | "7d" | "30d">("all");
     const [search_query, set_search_query] = useState("");
+    const [inactivityFilter, set_inactivity_filter] = useState<"all" | "1m" | "3m" | "6m" | "1y">("all");
+
+    const [analysisDateRange, set_analysis_date_range] = useState<"3d" | "7d" | "30d">("3d");
+    const [analysisFilterType, set_analysis_filter_type] = useState<"all" | "video" | "short">("all");
+
+    // Load persisted filters on mount
+    useEffect(() => {
+        const saved = localStorage.getItem('user_preferences');
+        if (saved) {
+            try {
+                const p = JSON.parse(saved);
+                if (p.selected_group_id !== undefined) set_selected_group_id(p.selected_group_id);
+                if (p.sort_order) set_sort_order(p.sort_order);
+                if (p.filter_type) set_filter_type(p.filter_type);
+                if (p.date_range) set_date_range(p.date_range);
+                // search_query is usually not persisted
+                if (p.inactivityFilter) set_inactivity_filter(p.inactivityFilter);
+                if (p.analysisDateRange) set_analysis_date_range(p.analysisDateRange);
+                if (p.analysisFilterType) set_analysis_filter_type(p.analysisFilterType);
+            } catch (e) {
+                console.error("Failed to load user preferences", e);
+            }
+        }
+    }, []);
+
+    // Save filters on change
+    useEffect(() => {
+        const prefs = {
+            selected_group_id,
+            sort_order,
+            filter_type,
+            date_range,
+            inactivityFilter,
+            analysisDateRange,
+            analysisFilterType
+        };
+        localStorage.setItem('user_preferences', JSON.stringify(prefs));
+    }, [selected_group_id, sort_order, filter_type, date_range, inactivityFilter, analysisDateRange, analysisFilterType]);
 
     const [is_activated, set_is_activated] = useState(false);
     const [license_status, set_license_status] = useState<LicenseStatus | null>(null);
@@ -110,8 +156,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const refreshData = useCallback(async (silent = false) => {
         if (!silent) set_loading(true);
         try {
-            console.log("[DataContext] Fetching settings...");
-
             // Fetch Tauri settings
             try {
                 const s = await invoke<AppSettings>('get_settings');
@@ -156,11 +200,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
             } catch (e) {
                 console.warn("Failed to init settings from Rust", e);
-                set_is_activated(false);
                 set_license_status(null);
             }
-
-            console.log("[DataContext] Activated. Fetching content...");
 
             try {
                 const [groupsData, channelsData] = await Promise.all([
@@ -214,7 +255,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
         sort_order, set_sort_order,
         filter_type, set_filter_type,
         date_range, set_date_range,
+
         search_query, set_search_query,
+        inactivityFilter, set_inactivity_filter,
+        analysisDateRange, set_analysis_date_range,
+        analysisFilterType, set_analysis_filter_type,
         video_cache,
         set_video_cache,
         is_activated,
@@ -224,7 +269,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         groups, channels, loading, refreshData, last_updated, scroll_positions,
         set_scroll_position, current_view, current_tab, selected_group_id,
         sort_order, filter_type, date_range, search_query, video_cache,
-        is_activated, license_status, settings
+        is_activated, license_status, settings,
+        inactivityFilter, analysisDateRange, analysisFilterType
     ]);
 
     return (

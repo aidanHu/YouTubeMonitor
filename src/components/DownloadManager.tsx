@@ -3,13 +3,13 @@
 import { useDownloads } from "@/context/DownloadContext";
 import { useData } from "@/context/DataContext";
 import { invoke } from "@tauri-apps/api/core";
-import { show_alert, show_error } from "@/lib/dialogs";
-import { Download, AlertCircle, CheckCircle2, X, FolderOpen, RotateCcw, Trash2, Filter, RefreshCw, Check } from "lucide-react";
+import { show_alert, show_error, show_confirm } from "@/lib/dialogs";
+import { Download, AlertCircle, CheckCircle2, X, FolderOpen, RotateCcw, Trash2, Filter, RefreshCw, Check, Ban } from "lucide-react";
 import Link from "next/link";
 import { useState, useMemo, memo } from "react";
 
 export function DownloadManager() {
-    const { downloads, retry_download, remove_download, retry_all_failed, clear_history } = useDownloads();
+    const { downloads, retry_download, remove_download, retry_all_failed, clear_history, cancel_all_downloads } = useDownloads();
     const { groups, channels, is_activated } = useData();
     const [selected_group_id, set_selected_group_id] = useState<number | null>(null);
     const [is_cleared, set_is_cleared] = useState(false);
@@ -37,6 +37,31 @@ export function DownloadManager() {
     }, [downloads, channels, selected_group_id]);
 
     const failedCount = downloads.filter(d => d.status === 'error').length;
+    const activeCount = downloads.filter(d => d.status === 'downloading' || d.status === 'queued').length;
+
+
+
+    const { activeGroupIds, hasUncategorized } = useMemo(() => {
+        const ids = new Set<number>();
+        let hasUncategorized = false;
+
+        downloads.forEach(item => {
+            let channel = null;
+            if (item.channel_id) {
+                channel = channels.find(c => c.id === item.channel_id);
+            } else if (item.channel_name) {
+                channel = channels.find(c => c.name === item.channel_name);
+            }
+
+            if (channel && channel.group_id) {
+                ids.add(channel.group_id);
+            } else {
+                hasUncategorized = true;
+            }
+        });
+
+        return { activeGroupIds: ids, hasUncategorized };
+    }, [downloads, channels]);
 
     if (downloads.length === 0) {
         return (
@@ -63,15 +88,29 @@ export function DownloadManager() {
                         }}
                     >
                         <option value="">全部下载</option>
-                        {groups.map(g => (
+                        {groups.filter(g => activeGroupIds.has(g.id)).map(g => (
                             <option key={g.id} value={g.id}>{g.name}</option>
                         ))}
-                        <option value="-1">未分组</option>
+                        {hasUncategorized && <option value="-1">未分组</option>}
                     </select>
                 </div>
 
                 {/* Actions */}
                 <div className="flex gap-2">
+                    {activeCount > 0 && (
+                        <button
+                            onClick={async () => {
+                                const confirm = await show_confirm("确定要取消所有正在进行和排队的下载任务吗？", "取消所有下载");
+                                if (confirm) {
+                                    await cancel_all_downloads();
+                                }
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-sm transition-colors"
+                        >
+                            <X size={14} />
+                            取消全部 ({activeCount})
+                        </button>
+                    )}
                     {failedCount > 0 && (
                         <button
                             onClick={async () => {
@@ -90,7 +129,6 @@ export function DownloadManager() {
                     <button
                         type="button"
                         onClick={() => {
-                            console.log("Clear History button clicked");
                             clear_history();
                             set_is_cleared(true);
                             setTimeout(() => set_is_cleared(false), 2000);
@@ -207,6 +245,12 @@ const DownloadItemCard = memo(function DownloadItemCard({
                                 失败: {item.error}
                             </span>
                         )}
+                        {item.status === 'cancelled' && (
+                            <span className="text-zinc-400 flex items-center gap-1">
+                                <Ban size={12} />
+                                已取消
+                            </span>
+                        )}
                         <span className="text-zinc-400 ml-auto">
                             {item.start_time.toLocaleTimeString()}
                         </span>
@@ -223,7 +267,21 @@ const DownloadItemCard = memo(function DownloadItemCard({
                                 try {
                                     await invoke('open_video_folder', { path: item.path });
                                 } catch (e: any) {
-                                    await show_error("打开文件夹失败: " + e);
+                                    const errStr = e.toString();
+                                    console.error("Open folder error:", errStr);
+
+                                    const errLower = errStr.toLowerCase();
+                                    if (errLower.includes("err_file_not_found") || errLower.includes("does not exist") || errLower.includes("no such file")) {
+                                        const confirm = await show_confirm(
+                                            "检测到本地文件不存在，可能已被删除。\n\n是否重新下载？",
+                                            "文件不存在"
+                                        );
+                                        if (confirm) {
+                                            retry_download(item.id);
+                                        }
+                                    } else {
+                                        await show_error("!!!打开文件夹失败: " + errStr);
+                                    }
                                 }
                             }}
                             className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-blue-500 transition-colors"
@@ -247,6 +305,15 @@ const DownloadItemCard = memo(function DownloadItemCard({
                         title="重试"
                     >
                         <RefreshCwIcon size={18} />
+                    </button>
+                )}
+                {item.status === 'cancelled' && (
+                    <button
+                        onClick={() => retry_download(item.id)}
+                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full text-zinc-600 dark:text-zinc-400"
+                        title="重新下载"
+                    >
+                        <RotateCcw size={18} />
                     </button>
                 )}
                 <button

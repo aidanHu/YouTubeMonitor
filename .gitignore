@@ -40,3 +40,21 @@ yarn-error.log*
 
 # Resources
 resources/bin/
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/WixTools/
+
+# Release files (keep in releases/ folder only)
+*.dmg
+*.msi
+*.exe
+*.app
+*.zip
+!releases/**/*
+
+# Temporary files
+app-icon.png
+test-clean-install.sh
+*.backup*
+

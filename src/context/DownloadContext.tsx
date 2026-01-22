@@ -4,13 +4,13 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useCa
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useData } from './DataContext';
-import { show_alert } from '@/lib/dialogs';
+import { show_alert, show_confirm } from '@/lib/dialogs';
 
 export interface DownloadItem {
     id: string; // Video ID
     title: string;
     thumbnail: string | null;
-    status: 'queued' | 'downloading' | 'completed' | 'error';
+    status: 'queued' | 'downloading' | 'completed' | 'error' | 'cancelled';
     progress: number; // 0-100
     start_time: Date;
     error?: string;
@@ -30,6 +30,9 @@ interface DownloadContextType {
     queue_downloads: (videos: { id: string; title: string; thumbnail: string | null; channel_name: string; channel_id?: string }[]) => void;
     clear_history: () => void;
     cancel_download: (id: string) => Promise<void>;
+    cookie_status: 'checking' | 'valid' | 'expired' | 'unknown';
+    check_cookie: () => Promise<void>;
+    cancel_all_downloads: () => Promise<void>;
 }
 
 const DownloadContext = createContext<DownloadContextType | undefined>(undefined);
@@ -37,6 +40,7 @@ const DownloadContext = createContext<DownloadContextType | undefined>(undefined
 export function DownloadProvider({ children }: { children: ReactNode }) {
     const [downloads, set_downloads] = useState<DownloadItem[]>([]);
     const [loaded, set_loaded] = useState(false);
+    const [cookie_status, set_cookie_status] = useState<'checking' | 'valid' | 'expired' | 'unknown'>('unknown');
     const MAX_CONCURRENT = 3;
     const { settings, is_activated } = useData();
 
@@ -78,9 +82,9 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
 
         const setup_listeners = async () => {
             unlisten_progress = await listen<any>('download-progress', (event) => {
-                const { video_id, progress, speed, eta } = event.payload;
+                const { videoId, progress, speed, eta } = event.payload;
                 set_downloads(prev => prev.map(d =>
-                    d.id === video_id ? { ...d, status: 'downloading', progress, speed, eta } : d
+                    d.id === videoId ? { ...d, status: 'downloading', progress, speed, eta } : d
                 ));
             });
 
@@ -91,7 +95,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
                 if (typeof event.payload === 'string') {
                     video_id = event.payload;
                 } else {
-                    video_id = event.payload.video_id;
+                    video_id = event.payload.videoId || event.payload.video_id; // Support both just in case
                     path = event.payload.path;
                 }
 
@@ -101,10 +105,17 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
             });
 
             unlisten_error = await listen<any>('download-error', (event) => {
-                const { video_id, error } = event.payload;
-                set_downloads(prev => prev.map(d =>
-                    d.id === video_id ? { ...d, status: 'error', error: error || "Download Failed" } : d
-                ));
+                const videoId = event.payload.videoId || event.payload.video_id;
+                const error = event.payload.error;
+
+                set_downloads(prev => prev.map(d => {
+                    if (d.id === videoId) {
+                        // If already cancelled, don't overwrite with error
+                        if (d.status === 'cancelled') return d;
+                        return { ...d, status: 'error', error: error || "Download Failed" };
+                    }
+                    return d;
+                }));
             });
         };
 
@@ -150,6 +161,25 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
+    const check_cookie = useCallback(async () => {
+        if (!settings?.cookie_source) {
+            set_cookie_status('unknown');
+            return;
+        }
+        set_cookie_status('checking');
+        try {
+            const valid = await invoke<boolean>('check_cookie_status', { path: settings.cookie_source });
+            set_cookie_status(valid ? 'valid' : 'expired');
+        } catch (e) {
+            console.error("Cookie check failed", e);
+            set_cookie_status('unknown');
+        }
+    }, [settings?.cookie_source]);
+
+    useEffect(() => {
+        check_cookie();
+    }, [check_cookie]);
+
     const start_download = useCallback(async (video: { id: string; title: string; thumbnail: string | null; channel_name: string; channel_id?: string }) => {
         if (!is_activated) {
             await show_alert("软件未激活，无法下载视频。\n请前往 [设置 -> 软件激活] 进行激活。", "提示", "warning");
@@ -158,6 +188,11 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         if (!settings?.download_path) {
             await show_alert("检测到未配置下载地址。\n\n请前往 [系统设置 -> 常规设置] 配置视频下载路径。", "配置错误", "error");
             return;
+        }
+
+        if (cookie_status === 'expired') {
+            const confirm = await show_confirm("检测到 Cookie 可能已失效，下载极有可能会失败或卡住。\n\n建议更新 Cookie 后再试。是否仍要强制下载？", "Cookie 已过期");
+            if (!confirm) return;
         }
 
         set_downloads(prev => {
@@ -188,6 +223,12 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
             await show_alert("检测到未配置下载地址。\n\n请前往 [系统设置 -> 常规设置] 配置视频下载路径。", "配置错误", "error");
             return;
         }
+
+        if (cookie_status === 'expired') {
+            const confirm = await show_confirm("检测到 Cookie 可能已失效，批量下载极有可能会失败。\n\n建议更新 Cookie 后再试。是否仍要强制下载？", "Cookie 已过期");
+            if (!confirm) return;
+        }
+
         set_downloads(prev => {
             const new_items: DownloadItem[] = [];
             for (const v of videos) {
@@ -209,7 +250,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
             const filtered = prev.filter(d => !new_ids.has(d.id));
             return [...new_items, ...filtered];
         });
-    }, [is_activated, settings?.download_path]);
+    }, [is_activated, settings?.download_path, cookie_status]);
 
     const retry_download = useCallback(async (id: string) => {
         if (!settings?.download_path) {
@@ -236,7 +277,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
                 console.error("Cancel failed", e);
             }
         }
-        set_downloads(prev => prev.map(d => d.id === id ? { ...d, status: 'error', error: "Cancelled by user" } : d));
+        set_downloads(prev => prev.map(d => d.id === id ? { ...d, status: 'cancelled', error: "Cancelled by user" } : d));
     }, []);
 
     const remove_download = useCallback(async (id: string) => {
@@ -254,11 +295,29 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
+    const cancel_all_downloads = useCallback(async () => {
+        const active_downloads = downloads.filter(d => d.status === 'downloading' || d.status === 'queued');
+
+        // 1. Mark all as cancelled in UI immediately
+        set_downloads(prev => prev.map(d =>
+            (d.status === 'downloading' || d.status === 'queued')
+                ? { ...d, status: 'cancelled', error: "Cancelled by user" }
+                : d
+        ));
+
+        // 2. Call backend to cancel each
+        // We run these in parallel
+        await Promise.all(active_downloads.map(d =>
+            invoke('cancel_download', { video_id: d.id }).catch(() => { }) // Ignore backend errors during batch cancel
+        ));
+
+    }, [downloads]);
+
     const value = useMemo(() => ({
         downloads, start_download, retry_download, retry_all_failed,
         remove_download, queue_downloads, clear_history,
-        cancel_download
-    }), [downloads, start_download, retry_download, retry_all_failed, remove_download, queue_downloads, clear_history, cancel_download]);
+        cancel_download, cookie_status, check_cookie, cancel_all_downloads
+    }), [downloads, start_download, retry_download, retry_all_failed, remove_download, queue_downloads, clear_history, cancel_download, cookie_status, check_cookie, cancel_all_downloads]);
 
     return (
         <DownloadContext.Provider value={value}>

@@ -99,8 +99,27 @@ export function VideoCardOverlay({ video, on_toggle_favorite }: VideoCardOverlay
             } else {
                 await show_error("未找到文件路径");
             }
-        } catch (e) {
-            await show_error("打开文件夹失败: " + e);
+        } catch (err: any) {
+            const errStr = err.toString();
+            const errLower = errStr.toLowerCase();
+
+            if (errLower.includes("err_file_not_found") || errLower.includes("does not exist") || errLower.includes("no such file")) {
+                const confirm = await show_confirm(
+                    "检测到本地文件不存在,可能已被删除。\n\n是否重新下载?",
+                    "文件不存在"
+                );
+                if (confirm) {
+                    start_download({
+                        id: video.id,
+                        title: video.title,
+                        thumbnail: video.thumbnail,
+                        channel_name: video.channel?.name || "Unknown",
+                        channel_id: video.channel?.id
+                    });
+                }
+            } else {
+                await show_error("打开文件夹失败: " + errStr);
+            }
         }
     };
 

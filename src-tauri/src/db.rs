@@ -32,7 +32,6 @@ pub async fn init(app: &AppHandle) -> Result<SqlitePool, Box<dyn std::error::Err
         .run(&pool)
         .await?;
         
-    println!("DEBUG: Migrations applied successfully");
 
     Ok(pool)
 }

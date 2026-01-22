@@ -46,6 +46,7 @@ pub fn run() {
         commands::save_settings,
         commands::download_video,
         commands::cancel_download,
+        commands::check_cookie_status,
 
         commands::refresh_cookies,
         commands::open_video_folder,

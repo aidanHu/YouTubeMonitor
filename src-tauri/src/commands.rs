@@ -59,7 +59,6 @@ pub async fn get_videos(
     date_range: Option<String>,
     channel_id: Option<String>
 ) -> Result<VideoResponse, String> {
-    println!("DEBUG: get_videos page={} favorites={:?} sort={:?} filter={:?}", page, favorites, sort, filter_type);
     use sqlx::QueryBuilder;
 
     let limit = if limit <= 0 { 50 } else { limit };
@@ -330,8 +329,6 @@ pub struct AppSettings {
     pub updated_at: DateTime<Utc>
 }
 
-// Duplicate get_videos removed from here
-
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_settings(pool: State<'_, SqlitePool>) -> Result<AppSettings, String> {
     let settings = sqlx::query_as::<_, AppSettings>("SELECT * FROM settings LIMIT 1")
@@ -368,18 +365,17 @@ pub async fn save_settings(
     download_path: Option<String>,
     max_concurrent_downloads: Option<i64>
 ) -> Result<(), String> {
-    println!("DEBUG: save_settings called with path: {:?}", download_path);
-    
     // Update Semaphore if limit changed
     if let Some(limit) = max_concurrent_downloads {
         let new_limit = if limit < 1 { 1 } else { limit as usize };
-        let mut current_sem = state.semaphore.lock().unwrap();
+        let mut current_sem = state.semaphore.lock()
+            .map_err(|e| format!("Failed to lock semaphore: {}", e))?;
         // Replacing the semaphore
         *current_sem = Arc::new(Semaphore::new(new_limit));
-        println!("DEBUG: Updated concurrency limit to {}", new_limit);
         
         // Update current limit value
-        let mut limit_guard = state.current_limit.lock().unwrap();
+        let mut limit_guard = state.current_limit.lock()
+            .map_err(|e| format!("Failed to lock current_limit: {}", e))?;
         *limit_guard = new_limit;
     }
     
@@ -394,7 +390,6 @@ pub async fn save_settings(
     let max_dl = max_concurrent_downloads.unwrap_or(3);
 
     if count == 0 {
-         println!("DEBUG: Inserting new settings row");
          sqlx::query("INSERT INTO settings (proxy_url, theme, cookie_source, download_path, max_concurrent_downloads, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(proxy_url)
             .bind(theme)
@@ -407,7 +402,6 @@ pub async fn save_settings(
             .await
             .map_err(|e| e.to_string())?;
     } else {
-        println!("DEBUG: Updating existing settings row");
         // Update first row
         sqlx::query("UPDATE settings SET proxy_url = ?, theme = ?, cookie_source = ?, download_path = ?, max_concurrent_downloads = ?, updated_at = ? WHERE id = (SELECT id FROM settings LIMIT 1)")
             .bind(proxy_url)
@@ -420,7 +414,6 @@ pub async fn save_settings(
             .await
             .map_err(|e| e.to_string())?;
     }
-    println!("DEBUG: save_settings success");
     Ok(())
 }
 
@@ -504,7 +497,8 @@ pub async fn download_video(
     // Acquire concurrency permit
     // We clone the current semaphore from the mutex
     let sem = {
-        let guard = state.semaphore.lock().unwrap();
+        let guard = state.semaphore.lock()
+            .map_err(|e| format!("Failed to lock semaphore: {}", e))?;
         guard.clone()
     };
     let _permit = sem.acquire().await.map_err(|e| e.to_string())?;
@@ -522,9 +516,15 @@ pub async fn download_video(
     cmd.arg("-o").arg(&output_template)
        .arg("--newline") // Critical for parsing line by line
        .arg("--no-playlist")
-        .arg("--extractor-args").arg("youtube:player_client=web") // Stick to web client only
-        .arg("-f").arg("bestvideo+bestaudio/best") // Robust format selection
-        .arg("--merge-output-format").arg("mp4");
+        .arg("--no-cache-dir") // Prevent cache issues
+        // Format selection optimized for compatibility
+        // Prefer formats that are already in mp4 container with h264 video and aac audio
+        // This ensures maximum compatibility with Mac QuickTime and Windows Media Player
+        .arg("-f").arg("bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
+        .arg("--merge-output-format").arg("mp4")
+        .arg("--recode-video").arg("mp4") // Force re-encode to mp4 if needed for compatibility
+        .arg("--postprocessor-args").arg("ffmpeg:-c:v libx264 -c:a aac -movflags +faststart") // Ensure compatible codecs and fast streaming
+        .arg("--concurrent-fragments").arg("4"); // Speed optimization: Parallel download
 
     if let Some(p) = proxy_url {
         if !p.is_empty() {
@@ -550,7 +550,8 @@ pub async fn download_video(
     // Store PID
     let pid = child.id().ok_or("Failed to get PID")?;
     {
-        let mut tasks = state.tasks.lock().unwrap();
+        let mut tasks = state.tasks.lock()
+            .map_err(|e| format!("Failed to lock tasks: {}", e))?;
         tasks.insert(video_id.clone(), pid);
     }
     
@@ -558,7 +559,8 @@ pub async fn download_video(
     let _ = app.emit("download-start", &video_id);
 
     // Read Output
-    let stdout = child.stdout.take().unwrap();
+    let stdout = child.stdout.take()
+        .ok_or("Failed to capture stdout")?;
     let mut reader = BufReader::new(stdout).lines();
     
     let mut final_path: Option<String> = None;
@@ -626,7 +628,8 @@ pub async fn download_video(
     
     // Cleanup PID
     {
-        let mut tasks = state.tasks.lock().unwrap();
+        let mut tasks = state.tasks.lock()
+            .map_err(|e| format!("Failed to lock tasks: {}", e))?;
         tasks.remove(&video_id);
     }
     
@@ -655,6 +658,10 @@ pub async fn download_video(
 pub async fn open_video_folder(path: String) -> Result<(), String> {
     if path.is_empty() { return Err("Path is empty".to_string()); }
     
+    if !std::path::Path::new(&path).exists() {
+        return Err(format!("ERR_FILE_NOT_FOUND: {}", path));
+    }
+
     use std::process::Command;
     
     #[cfg(target_os = "macos")]
@@ -722,6 +729,39 @@ pub async fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn check_cookie_status(_app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    if path.is_empty() { return Ok(false); }
+    
+    use tokio::process::Command;
+    
+    let mut cmd = Command::new("yt-dlp");
+    
+    // Use robust PATH resolution
+    if let Ok(p) = std::env::var("PATH") {
+        let new_path = construct_robust_path(&p);
+        cmd.env("PATH", new_path);
+    }
+    
+    cmd.arg("--cookies").arg(&path)
+       .arg("--dump-json") // Lightweight check
+       .arg("--no-playlist")
+       .arg("https://www.youtube.com/watch?v=dQw4w9WgXcQ"); // Never gonna give you up (reliable test video)
+
+    // Capture output
+    let output = cmd.output().await.map_err(|e| e.to_string())?;
+    
+    // Check success
+    if output.status.success() {
+        Ok(true)
+    } else {
+        // Optional: Parse stderr to see if it's specifically an auth error
+        // let stderr = String::from_utf8_lossy(&output.stderr);
+        // if stderr.contains("Sign in") || stderr.contains("cookies") ...
+        Ok(false)
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn migrate_files(pool: State<'_, SqlitePool>) -> Result<MigrationStats, String> {
     // 1. Get Download Path
     let download_path: Option<String> = sqlx::query_scalar("SELECT download_path FROM settings LIMIT 1")
@@ -770,8 +810,8 @@ pub async fn migrate_files(pool: State<'_, SqlitePool>) -> Result<MigrationStats
                 if !new_channel_path.exists() {
                     match std::fs::rename(&old_channel_path, &new_channel_path) {
                         Ok(_) => stats.moved_folders += 1,
-                        Err(e) => {
-                             println!("Failed to move {}: {}", old_channel_path.display(), e);
+                        Err(_e) => {
+                             // Failed to move folder, continue with others
                              stats.errors += 1;
                         }
                     }
@@ -789,7 +829,8 @@ pub async fn cancel_download(
     video_id: String
 ) -> Result<(), String> {
     let pid = {
-        let tasks = state.tasks.lock().unwrap();
+        let tasks = state.tasks.lock()
+            .map_err(|e| format!("Failed to lock tasks: {}", e))?;
         tasks.get(&video_id).cloned()
     };
     
@@ -868,18 +909,18 @@ pub async fn get_channels(pool: State<'_, SqlitePool>, sort: Option<String>) -> 
         };
 
         channels.push(Channel {
-            id: row.try_get("id").unwrap(),
-            url: row.try_get("url").unwrap(),
-            name: row.try_get("name").unwrap(),
+            id: row.try_get("id").map_err(|e| e.to_string())?,
+            url: row.try_get("url").map_err(|e| e.to_string())?,
+            name: row.try_get("name").map_err(|e| e.to_string())?,
             thumbnail: row.try_get("thumbnail").ok(),
             subscriber_count: row.try_get("subscriber_count").unwrap_or(0),
-            view_count: row.try_get("view_count").unwrap(),
+            view_count: row.try_get("view_count").map_err(|e| e.to_string())?,
             video_count: row.try_get("video_count").unwrap_or(0),
             group_id,
             group,
             is_favorite: row.try_get("is_favorite").unwrap_or(false),
             is_pinned: row.try_get("is_pinned").unwrap_or(false),
-            created_at: row.try_get("created_at").unwrap(),
+            created_at: row.try_get("created_at").map_err(|e| e.to_string())?,
             last_upload_at: row.try_get("last_upload_at").ok(),
         });
     }
@@ -909,8 +950,6 @@ pub async fn add_channels(
     urls: Vec<String>,
     group_id: Option<i64>
 ) -> Result<Vec<AddChannelResult>, String> {
-    println!("DEBUG: add_channels called with {} urls, group_id={:?}", urls.len(), group_id);
-    
     // Reset cancellation flag
     cancel_flag.0.store(false, Ordering::Relaxed);
     
@@ -1079,8 +1118,8 @@ async fn add_single_channel(pool: &SqlitePool, url: &str, group_id: Option<i64>)
     // 4. Sync recent videos (last month)
     // We call existing sync_channel_videos helper which now uses API
     // We ignore error to return success for channel addition
-    if let Err(e) = sync_channel_videos(pool, &channel_id, Some("month".to_string()), proxy).await {
-        eprintln!("Failed to sync initial videos: {}", e);
+    if let Err(_e) = sync_channel_videos(pool, &channel_id, Some("month".to_string()), proxy).await {
+        // Failed to sync initial videos, but channel was added successfully
     }
     
     Ok((name, channel_id))
@@ -1264,7 +1303,6 @@ async fn update_channel_stats(conn: &mut SqliteConnection, channel_id: &str) -> 
         .execute(&mut *conn)
         .await?;
 
-    println!("DEBUG: Updated stats for {}: avg={}, std_dev={}", channel_id, mean, std_dev);
     Ok(())
 }
 
@@ -1278,8 +1316,8 @@ pub async fn recalculate_all_stats(pool: State<'_, SqlitePool>) -> Result<String
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     let mut count = 0;
     for id in channels {
-        if let Err(e) = update_channel_stats(&mut *tx, &id).await {
-            println!("ERROR updating stats for {}: {}", id, e);
+        if let Err(_e) = update_channel_stats(&mut *tx, &id).await {
+            // Stats update failed for this channel, continue with others
         } else {
             count += 1;
         }
@@ -1581,7 +1619,7 @@ pub async fn move_channel(
                                 move_message = format!("已将文件夹移动到: {}", new_group_name);
                             },
                             Err(e) => {
-                                eprintln!("Failed to move folder from {:?} to {:?}: {}", old_path, new_path, e);
+                                // Failed to move folder
                                 move_message = format!("文件夹移动失败: {}", e);
                             }
                         }
@@ -2209,7 +2247,6 @@ pub async fn get_video(pool: State<'_, SqlitePool>, id: String) -> Result<VideoW
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn toggle_video_favorite(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {
-    println!("toggle_video_favorite called for id: {}", id);
     // Use 1 - is_favorite to ensure 0/1 toggle works safely
     sqlx::query("UPDATE videos SET is_favorite = 1 - is_favorite WHERE id = ?")
         .bind(&id)
