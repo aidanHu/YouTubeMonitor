@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-videos"
+description = "Enables the get_videos command without any pre-configured scope."
+commands.allow = ["get_videos"]
+
+[[permission]]
+identifier = "deny-get-videos"
+description = "Denies the get_videos command without any pre-configured scope."
+commands.deny = ["get_videos"]

@@ -1,0 +1,80 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "default",
+    "description": "Main application capabilities with all custom commands enabled",
+    "windows": [
+        "main"
+    ],
+    "origins": [
+        "http://localhost:1430",
+        "tauri://localhost",
+        "ipc://localhost"
+    ],
+    "permissions": [
+        "core:default",
+        "core:app:default",
+        "core:window:default",
+        "core:webview:default",
+        "dialog:default",
+        "shell:allow-open",
+        "core:window:allow-start-dragging",
+        "allow-activate-software",
+        "allow-add-api-key",
+        "allow-add-channels",
+        "allow-cancel-add-channels",
+        "allow-cancel-download",
+        "allow-check-cookie-status",
+        "allow-check-dependencies",
+        "allow-clear-all-data",
+        "allow-clear-download-history",
+        "allow-create-group",
+        "allow-delete-api-key",
+        "allow-delete-channel",
+        "allow-delete-group",
+        "allow-download-video",
+        "allow-export-backup",
+        "allow-export-backup-to-file",
+        "allow-get-api-keys",
+        "allow-get-channel-details",
+        "allow-get-channel-stats",
+        "allow-get-channels",
+        "allow-get-group-stats",
+        "allow-get-groups",
+        "allow-get-machine-id",
+        "allow-get-settings",
+        "allow-get-video",
+        "allow-get-videos",
+        "allow-get-viral-videos",
+        "allow-import-backup",
+        "allow-migrate-files",
+        "allow-move-channel",
+        "allow-open-url",
+        "allow-open-video-folder",
+        "allow-recalculate-all-stats",
+        "allow-refresh-all-channels",
+        "allow-refresh-channel",
+        "allow-refresh-cookies",
+        "allow-resolve-video-info",
+        "allow-save-settings",
+        "allow-toggle-channel-favorite",
+        "allow-toggle-channel-pin",
+        "allow-toggle-video-favorite",
+        "allow-update-api-key",
+        "allow-update-group",
+        {
+            "identifier": "shell:allow-execute",
+            "allow": [
+                {
+                    "name": "yt-dlp",
+                    "cmd": "yt-dlp",
+                    "args": true
+                },
+                {
+                    "name": "ffmpeg",
+                    "cmd": "ffmpeg",
+                    "args": true
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Next.js
+.next/
+out/
+build/
+
+# Electron
+dist/
+release/
+
+# Misc
+.DS_Store
+*.pem
+
+# Environment variables
+.env
+.env*.local
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Prisma
+# /prisma/sqlite.db
+# /prisma/sqlite.db-journal
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Resources
+resources/bin/
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/WixTools/
+
+# Release files (keep in releases/ folder only)
+*.dmg
+*.msi
+*.exe
+*.app
+*.zip
+!releases/**/*
+
+# Temporary files
+app-icon.png
+test-clean-install.sh
+*.backup*
+

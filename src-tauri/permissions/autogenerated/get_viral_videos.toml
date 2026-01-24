@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-viral-videos"
+description = "Enables the get_viral_videos command without any pre-configured scope."
+commands.allow = ["get_viral_videos"]
+
+[[permission]]
+identifier = "deny-get-viral-videos"
+description = "Denies the get_viral_videos command without any pre-configured scope."
+commands.deny = ["get_viral_videos"]

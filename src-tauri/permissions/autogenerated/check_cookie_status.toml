@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-cookie-status"
+description = "Enables the check_cookie_status command without any pre-configured scope."
+commands.allow = ["check_cookie_status"]
+
+[[permission]]
+identifier = "deny-check-cookie-status"
+description = "Denies the check_cookie_status command without any pre-configured scope."
+commands.deny = ["check_cookie_status"]
