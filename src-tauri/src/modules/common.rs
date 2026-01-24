@@ -171,10 +171,16 @@ pub async fn check_cookie_status(app: tauri::AppHandle, path: String) -> Result<
         return Ok(false);
     }
 
-    let command = app.shell().sidecar("yt-dlp")
-        .map_err(|e| format!("Failed to create sidecar: {}", e))?;
+    let command = match app.shell().sidecar("yt-dlp") {
+        Ok(cmd) => cmd,
+        Err(_e) => {
+             // Sidecar configuration issue or binary missing
+             // eprintln!("Sidecar 'yt-dlp' not configured or missing: {}", e);
+             return Ok(false);
+        }
+    };
     
-    let output = command
+    let result = command
         .args(vec![
             "--cookies".to_string(),
             path,
@@ -183,13 +189,26 @@ pub async fn check_cookie_status(app: tauri::AppHandle, path: String) -> Result<
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string()
         ])
         .output()
-        .await
-        .map_err(|e| e.to_string())?;
+        .await;
 
-    if output.status.success() {
-        Ok(true)
-    } else {
-        Ok(false)
+    match result {
+        Ok(output) => {
+             if output.status.success() {
+                 Ok(true)
+             } else {
+                 Ok(false)
+             }
+        },
+        Err(e) => {
+            // Check for file not found (os error 2)
+            let err_str = e.to_string();
+             if err_str.contains("os error 2") || err_str.contains("No such file") {
+                 // Suppress error for missing binary
+                 Ok(false) 
+             } else {
+                 Err(err_str)
+             }
+        }
     }
 }
 

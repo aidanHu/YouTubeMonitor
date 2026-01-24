@@ -269,19 +269,28 @@ pub async fn get_video_details(
     if video_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let ids_str = video_ids.join(",");
-    let url = format!("https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={}&key={}", ids_str, api_key);
 
-    let resp = client.get(&url).send().await?;
-    let text = resp.text().await?;
-    let list: VideoListResponse = serde_json::from_str(&text).map_err(|e| {
-        format!(
-            "Failed to parse VideoListResponse: {}. Response: {}",
-            e, text
-        )
-    })?;
+    let mut all_items = Vec::new();
 
-    Ok(list.items.unwrap_or_default())
+    for chunk in video_ids.chunks(50) {
+        let ids_str = chunk.join(",");
+        let url = format!("https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={}&key={}", ids_str, api_key);
+
+        let resp = client.get(&url).send().await?;
+        let text = resp.text().await?;
+        let list: VideoListResponse = serde_json::from_str(&text).map_err(|e| {
+            format!(
+                "Failed to parse VideoListResponse: {}. Response: {}",
+                e, text
+            )
+        })?;
+        
+        if let Some(mut items) = list.items {
+            all_items.append(&mut items);
+        }
+    }
+
+    Ok(all_items)
 }
 
 pub fn parse_duration_to_seconds(iso_duration: &str) -> i64 {
