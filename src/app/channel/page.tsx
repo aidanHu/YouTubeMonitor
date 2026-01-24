@@ -28,7 +28,7 @@ function SyncButton({ channel_id, on_sync, on_complete }: { channel_id: string, 
         set_loading(true);
         on_sync();
 
-        let date_range = null;
+        let date_range = "all";
         if (days) {
             date_range = `now-${days}days`;
         }
