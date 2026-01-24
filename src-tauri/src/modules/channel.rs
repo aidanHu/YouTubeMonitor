@@ -262,7 +262,7 @@ async fn add_single_channel(
         .await?;
 
     // 4. Sync recent videos
-    if let Err(_e) = sync_channel_videos(pool, client, &channel_id, Some("month".to_string())).await
+    if let Err(_e) = sync_channel_videos(pool, client, &channel_id, Some("now-30days".to_string())).await
     {
         // Ignore error
     }
@@ -291,15 +291,29 @@ pub async fn sync_channel_videos(
 
     // 2. Determine Date Threshold
     let threshold_date = match date_range.as_deref() {
-        Some("today") => Some(Utc::now() - Duration::days(1)),
-        Some("week") => Some(Utc::now() - Duration::days(7)),
-        Some("month") => Some(Utc::now() - Duration::days(30)),
-        Some("year") => Some(Utc::now() - Duration::days(365)),
-        _ => None,
+        Some("all") => None,
+        Some(s) if s.starts_with("now-") => {
+            let part = &s[4..]; // remove "now-"
+            let now = Utc::now();
+            if part.ends_with("days") {
+                 let num = part.trim_end_matches("days").parse::<i64>().unwrap_or(7);
+                 Some(now - Duration::days(num))
+            } else if part.ends_with("months") {
+                 let num = part.trim_end_matches("months").parse::<i64>().unwrap_or(1);
+                 Some(now - Duration::days(num * 30))
+            } else if part.ends_with("year") {
+                 let num = part.trim_end_matches("year").parse::<i64>().unwrap_or(1);
+                 Some(now - Duration::days(num * 365))
+            } else {
+                 Some(now - Duration::days(7))
+            }
+        },
+        _ => Some(Utc::now() - Duration::days(7)), // Default fallback
     };
 
     // 3. Fetch Uploads Playlist Items
-    let video_ids = youtube_api::get_upload_playlist_items(&client, &api_key, &uploads_id, 50)
+    // Pass 50 as page size, but loop internally
+    let video_ids = youtube_api::get_upload_playlist_items(&client, &api_key, &uploads_id, 50, threshold_date)
         .await
         .map_err(|e| format!("Failed to fetch uploads: {}", e))?;
 

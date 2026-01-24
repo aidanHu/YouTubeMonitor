@@ -89,6 +89,8 @@ pub struct PlaylistItemResource {
 pub struct PlaylistItemSnippet {
     #[serde(rename = "resourceId")]
     pub resource_id: ResourceId,
+    #[serde(rename = "publishedAt")]
+    pub published_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,27 +192,69 @@ pub async fn get_upload_playlist_items(
     api_key: &str,
     playlist_id: &str,
     max_results: u32,
+    after: Option<DateTime<Utc>>,
 ) -> Result<Vec<String>, Box<dyn Error>> {
-    let url = format!("https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={}&maxResults={}&key={}", playlist_id, max_results, api_key);
-
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("API Error: {}", text).into());
-    }
-
-    let text = resp.text().await?;
-    let list: PlaylistItemListResponse = serde_json::from_str(&text).map_err(|e| {
-        format!(
-            "Failed to parse PlaylistItemListResponse: {}. Response: {}",
-            e, text
-        )
-    })?;
     let mut video_ids = Vec::new();
+    let mut next_page_token: Option<String> = None;
+    let mut has_more = true;
+    let mut total_fetched = 0;
+    // Safety limit to prevent infinite loops or huge quota usage
+    let safeguard_limit = 500; 
 
-    if let Some(items) = list.items {
-        for item in items {
-            video_ids.push(item.snippet.resource_id.video_id);
+    while has_more && total_fetched < safeguard_limit {
+        let mut url = format!(
+            "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId={}&maxResults={}&key={}",
+            playlist_id, 
+            std::cmp::min(max_results, 50), // API max is 50 per page
+            api_key
+        );
+
+        if let Some(token) = &next_page_token {
+            url.push_str(&format!("&pageToken={}", token));
+        }
+
+        let resp = client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("API Error: {}", text).into());
+        }
+
+        let text = resp.text().await?;
+        let list: PlaylistItemListResponse = serde_json::from_str(&text).map_err(|e| {
+            format!(
+                "Failed to parse PlaylistItemListResponse: {}. Response: {}",
+                e, text
+            )
+        })?;
+
+        if let Some(items) = list.items {
+            if items.is_empty() {
+                has_more = false;
+            }
+
+            for item in items {
+                // Check date if provided
+                if let Some(threshold) = after {
+                    if let Some(published) = item.snippet.published_at {
+                        if published < threshold {
+                            has_more = false;
+                            break; 
+                        }
+                    }
+                }
+
+                video_ids.push(item.snippet.resource_id.video_id);
+                total_fetched += 1;
+            }
+        } else {
+            has_more = false;
+        }
+
+        if has_more {
+            next_page_token = list.next_page_token;
+            if next_page_token.is_none() {
+                has_more = false;
+            }
         }
     }
 
