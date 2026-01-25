@@ -63,3 +63,7 @@ app-icon.png
 test-clean-install.sh
 *.backup*
 
+
+ACTIVATION_TUTORIAL.md
+
+generate_key.py
