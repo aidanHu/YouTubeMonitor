@@ -16,7 +16,7 @@ import { show_alert, show_confirm, show_error, show_success } from "@/lib/dialog
 
 export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
     const { refreshData, is_activated, license_status } = useData();
-    const { cookie_status } = useDownloads();
+    const { cookie_status, check_cookie } = useDownloads();
 
     // Tabs configuration
     const tabs = [
@@ -416,34 +416,53 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
                                         {cookie_status === 'valid' && <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded flex items-center gap-1"><CheckCircle2 size={10} /> 有效</span>}
                                         {cookie_status === 'expired' && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded flex items-center gap-1"><XCircle size={10} /> 已失效</span>}
                                         {cookie_status === 'unknown' && cookie_source !== 'none' && <span className="text-[10px] bg-yellow-100 text-yellow-600 px-1.5 py-0.5 rounded flex items-center gap-1"><Info size={10} /> 未检测</span>}
+
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                check_cookie();
+                                            }}
+                                            className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-blue-500 transition-colors"
+                                            title="立即检测"
+                                        >
+                                            <RefreshCw size={12} className={cookie_status === 'checking' ? 'animate-spin' : ''} />
+                                        </button>
                                     </div>
                                 </h3>
 
                                 <div className="space-y-3">
                                     <label className="text-sm text-zinc-600 dark:text-zinc-400">Cookie 来源</label>
                                     <select
-                                        value={cookie_source.startsWith('/') || cookie_source.includes('\\') || (cookie_source !== 'none' && cookie_source !== '') ? 'file' : 'none'}
+                                        value={
+                                            cookie_source.startsWith('browser:')
+                                                ? cookie_source
+                                                : (cookie_source.startsWith('/') || cookie_source.includes('\\') || (cookie_source !== 'none' && cookie_source !== '') ? 'file' : 'none')
+                                        }
                                         onChange={(e) => {
                                             const val = e.target.value;
                                             if (val === 'file') {
-                                                // If switching to file mode but no path set, clear it to show input
-                                                if (cookie_source === 'none') set_cookie_source('');
+                                                if (cookie_source === 'none' || cookie_source.startsWith('browser:')) set_cookie_source('');
                                             } else {
-                                                set_cookie_source('none');
+                                                set_cookie_source(val);
                                             }
                                             set_show_cookie_input(val === 'file');
                                         }}
                                         className="w-full px-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-none outline-none focus:ring-2 focus:ring-blue-500 appearance-none"
                                     >
                                         <option value="none">不使用 Cookie (默认)</option>
+                                        <optgroup label="直接读取浏览器 (推荐)">
+                                            <option value="browser:chrome">Google Chrome</option>
+                                            <option value="browser:firefox">Mozilla Firefox</option>
+                                            <option value="browser:safari">Safari</option>
+                                        </optgroup>
                                         <option value="file">使用 cookies.txt 文件...</option>
                                     </select>
 
-                                    {(show_cookie_input || cookie_source.startsWith('/') || cookie_source.includes('\\')) && (
+                                    {(show_cookie_input || (!cookie_source.startsWith('browser:') && (cookie_source.startsWith('/') || cookie_source.includes('\\')))) && (
                                         <div className="animate-in fade-in slide-in-from-top-2">
                                             <input
                                                 type="text"
-                                                value={cookie_source}
+                                                value={cookie_source.startsWith('browser:') ? '' : cookie_source}
                                                 onChange={(e) => set_cookie_source(e.target.value)}
                                                 placeholder="/path/to/cookies.txt"
                                                 className="w-full px-4 py-3 rounded-xl bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 focus:ring-2 focus:ring-blue-500 outline-none transition-all placeholder:text-zinc-400 font-mono text-sm"

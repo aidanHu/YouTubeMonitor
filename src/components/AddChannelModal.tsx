@@ -1,8 +1,8 @@
 "use client";
 
 import { Group } from "@/types";
-import { Plus, Check, X, Loader2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Plus, Check, X, Loader2, ChevronDown, Search } from "lucide-react";
+import { useState, useEffect, useMemo } from "react";
 import { show_error, show_alert } from "@/lib/dialogs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -39,6 +39,15 @@ export function AddChannelModal({
     const [creatingGroup, set_creating_group] = useState(false);
     const [progress, set_progress] = useState<ProgressEvent | null>(null);
 
+    // Dropdown state
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+
+    const filteredGroups = useMemo(() => {
+        if (!searchQuery.trim()) return groups;
+        return groups.filter(g => g.name.toLowerCase().includes(searchQuery.toLowerCase()));
+    }, [groups, searchQuery]);
+
     useEffect(() => {
         let unlisten: (() => void) | undefined;
 
@@ -50,6 +59,10 @@ export function AddChannelModal({
 
         if (is_open) {
             setup();
+        } else {
+            // Reset state on close
+            setIsDropdownOpen(false);
+            setSearchQuery("");
         }
 
         return () => {
@@ -187,13 +200,13 @@ export function AddChannelModal({
                                 <label className="block text-xs font-semibold uppercase text-zinc-500 mb-1">
                                     分配分组
                                 </label>
-                                <div className="space-y-2">
+                                <div className="space-y-2 relative">
                                     {is_creating_group ? (
-                                        <div className="flex gap-2">
+                                        <div className="flex gap-2 animate-in fade-in slide-in-from-left-2 duration-200">
                                             <input
                                                 type="text"
                                                 placeholder="输入新分组名称"
-                                                className="flex-1 p-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                                className="flex-1 p-2.5 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-sm outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                                                 value={newGroupName}
                                                 onChange={(e) => set_new_group_name(e.target.value)}
                                                 autoFocus
@@ -204,46 +217,108 @@ export function AddChannelModal({
                                             <button
                                                 onClick={handle_create_group}
                                                 disabled={creatingGroup || !newGroupName.trim()}
-                                                className="px-3 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50 text-sm font-medium"
+                                                className="px-4 py-2 bg-blue-600 text-white rounded-xl disabled:opacity-50 text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm shadow-blue-600/20"
                                             >
                                                 确定
                                             </button>
                                             <button
                                                 onClick={() => set_is_creating_group(false)}
-                                                className="px-3 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-lg text-sm font-medium"
+                                                className="px-4 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-xl text-sm font-medium hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
                                             >
                                                 取消
                                             </button>
                                         </div>
                                     ) : (
-                                        <div className="flex gap-2">
-                                            <select
-                                                className="flex-1 p-2 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-sm outline-none"
-                                                value={selectedGroup}
-                                                onChange={(e) =>
-                                                    set_selected_group(
-                                                        e.target.value === "" ? "" : parseInt(e.target.value)
-                                                    )
-                                                }
+                                        <div className="relative">
+                                            {/* Custom Dropdown Trigger */}
+                                            <div
+                                                className={`flex items-center justify-between w-full p-2.5 rounded-xl border cursor-pointer transition-all ${isDropdownOpen
+                                                    ? "border-blue-500 ring-2 ring-blue-500/20 bg-white dark:bg-zinc-950"
+                                                    : "border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 hover:border-blue-500/50 hover:bg-white dark:hover:bg-zinc-900"}`}
+                                                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                                             >
-                                                <option value="">无分组 (未分类)</option>
-                                                {groups.map((g) => (
-                                                    <option key={g.id} value={g.id}>
-                                                        {g.name}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            {on_group_create && (
-                                                <button
-                                                    onClick={() => {
-                                                        set_is_creating_group(true);
-                                                        set_new_group_name("");
-                                                    }}
-                                                    className="px-3 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
-                                                    title="创建新分组"
-                                                >
-                                                    <Plus size={18} />
-                                                </button>
+                                                <div className="flex items-center gap-2 overflow-hidden">
+                                                    <span className={`text-sm truncate ${selectedGroup === "" ? "text-zinc-500" : "text-zinc-900 dark:text-zinc-100"}`}>
+                                                        {selectedGroup === ""
+                                                            ? "选择分组 (可选)"
+                                                            : groups.find(g => g.id === selectedGroup)?.name || "未知分组"}
+                                                    </span>
+                                                </div>
+                                                <ChevronDown size={16} className={`text-zinc-400 transition-transform duration-200 ${isDropdownOpen ? "rotate-180" : ""}`} />
+                                            </div>
+
+                                            {/* Dropdown Menu */}
+                                            {isDropdownOpen && (
+                                                <>
+                                                    <div className="fixed inset-0 z-10" onClick={() => setIsDropdownOpen(false)} />
+                                                    <div className="absolute z-20 w-full mt-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top flex flex-col max-h-[300px]">
+                                                        {/* Search */}
+                                                        <div className="p-2 border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 backdrop-blur-sm sticky top-0">
+                                                            <div className="relative">
+                                                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="搜索分组..."
+                                                                    className="w-full pl-9 pr-3 py-1.5 text-sm bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all placeholder:text-zinc-400"
+                                                                    value={searchQuery}
+                                                                    onChange={e => setSearchQuery(e.target.value)}
+                                                                    autoFocus
+                                                                    onClick={e => e.stopPropagation()}
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        {/* List */}
+                                                        <div className="overflow-y-auto p-1.5 flex-1 min-h-0">
+                                                            <div
+                                                                className={`px-3 py-2 rounded-lg text-sm cursor-pointer flex items-center justify-between transition-colors ${selectedGroup === "" ? "bg-blue-50 dark:bg-blue-900/20 text-blue-600 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                                                                onClick={() => { set_selected_group(""); setIsDropdownOpen(false); }}
+                                                            >
+                                                                <span>无分组 (未分类)</span>
+                                                                {selectedGroup === "" && <Check size={14} />}
+                                                            </div>
+
+                                                            <div className="h-px bg-zinc-100 dark:bg-zinc-800 my-1 mx-2" />
+
+                                                            {filteredGroups.map(g => (
+                                                                <div
+                                                                    key={g.id}
+                                                                    className={`px-3 py-2 rounded-lg text-sm cursor-pointer flex items-center justify-between transition-colors ${selectedGroup === g.id ? "bg-blue-50 dark:bg-blue-900/20 text-blue-600 font-medium" : "text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                                                                    onClick={() => { set_selected_group(g.id); setIsDropdownOpen(false); }}
+                                                                >
+                                                                    <span className="truncate">{g.name}</span>
+                                                                    {selectedGroup === g.id && <Check size={14} />}
+                                                                </div>
+                                                            ))}
+
+                                                            {filteredGroups.length === 0 && (
+                                                                <div className="px-3 py-8 text-center text-xs text-zinc-500 flex flex-col items-center gap-2">
+                                                                    <Search size={20} className="text-zinc-300 dark:text-zinc-700" />
+                                                                    <p>未找到 "{searchQuery}"</p>
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        {/* Create Action */}
+                                                        {on_group_create && (
+                                                            <div
+                                                                className="p-2 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 sticky bottom-0"
+                                                            >
+                                                                <button
+                                                                    className="w-full px-3 py-2 rounded-lg text-sm font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                                                                    onClick={() => {
+                                                                        setIsDropdownOpen(false);
+                                                                        set_is_creating_group(true);
+                                                                        set_new_group_name(searchQuery); // Pre-fill with search
+                                                                    }}
+                                                                >
+                                                                    <Plus size={16} />
+                                                                    创建新分组
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </>
                                             )}
                                         </div>
                                     )}
@@ -253,7 +328,7 @@ export function AddChannelModal({
                     )}
                 </div>
 
-                <div className="p-4 flex justify-end gap-2 border-t border-zinc-100 dark:border-zinc-800">
+                <div className="p-4 flex justify-end gap-2 border-t border-zinc-100 dark:border-zinc-800 rounded-b-2xl">
                     <button
                         onClick={handle_modal_close}
                         className="px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg"

@@ -89,28 +89,8 @@ pub async fn download_video(
     let url = format!("https://www.youtube.com/watch?v={}", video_id);
 
     // 4. Construct System Command
-    // Fix PATH for macOS GUI apps
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(path) = std::env::var("PATH") {
-            if !path.contains("/usr/local/bin") {
-                std::env::set_var("PATH", format!("{}:/usr/local/bin:/opt/homebrew/bin", path));
-            }
-        } else {
-             std::env::set_var("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin");
-        }
-    }
-
-    let command_name = "yt-dlp";
-    let mut command = tokio::process::Command::new(command_name);
-
-    // No window on Windows
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    // Use shared builder to handle PATH, Windows flags, and Proxy
+    let mut command = crate::modules::common::create_ytdlp_command(proxy_url);
 
     let mut cmd_args = vec![
         // Force H.264 (avc*) video and AAC audio for max compatibility
@@ -124,21 +104,18 @@ pub async fn download_video(
         "--progress-template".to_string(), "%(progress)j".to_string(), 
     ];
 
-    if let Some(p) = proxy_url {
-        if !p.is_empty() {
-            cmd_args.push("--proxy".to_string());
-            cmd_args.push(p);
-        }
-    }
+    // Proxy is handled by helper
 
     if let Some(c) = cookie_source {
-        if !c.is_empty() && c != "none" && std::path::Path::new(&c).exists() {
-            cmd_args.push("--cookies".to_string());
-            cmd_args.push(c);
+        if !c.is_empty() && c != "none" {
+             crate::modules::common::add_cookie_args(&mut command, &c);
         }
     }
 
     cmd_args.push(url);
+    
+    // Clear cache to avoid stale bot detection states
+    cmd_args.push("--rm-cache-dir".to_string());
 
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());

@@ -450,6 +450,8 @@ export default function Home() {
                 <DownloadSingleVideoModal
                     is_open={is_download_modal_open}
                     on_close={() => set_is_download_modal_open(false)}
+                    group_id={selected_group_id}
+                    groups={groups}
                 />
             </div>
         </div>

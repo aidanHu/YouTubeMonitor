@@ -127,7 +127,10 @@ export function Sidebar({
                     </button>
 
                     <button
-                        onClick={() => on_select_view && on_select_view('downloads')}
+                        onClick={() => {
+                            if (on_select_view) on_select_view('downloads');
+                            if (on_select_group) on_select_group(null);
+                        }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors ${activeView === 'downloads'
                             ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-medium"
                             : "hover:bg-zinc-200 dark:hover:bg-zinc-800"

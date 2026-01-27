@@ -16,6 +16,8 @@ pub async fn get_videos(
     search: Option<String>,
     date_range: Option<String>,
     channel_id: Option<String>,
+    min_views: Option<i64>,
+
 ) -> Result<VideoResponse, String> {
     use sqlx::QueryBuilder;
 
@@ -78,6 +80,11 @@ pub async fn get_videos(
             count_builder.push_bind(int);
             count_builder.push(")");
          }
+    }
+
+    if let Some(mv) = min_views {
+        count_builder.push(" AND CAST(v.view_count AS INTEGER) >= ");
+        count_builder.push_bind(mv);
     }
 
     let total: i64 = count_builder
@@ -151,6 +158,11 @@ pub async fn get_videos(
             query_builder.push_bind(int);
             query_builder.push(")");
         }
+   }
+    
+   if let Some(mv) = min_views {
+       query_builder.push(" AND CAST(v.view_count AS INTEGER) >= ");
+       query_builder.push_bind(mv);
    }
 
     let sort_sql = match sort.as_deref() {

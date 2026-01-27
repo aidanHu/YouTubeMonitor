@@ -158,56 +158,101 @@ pub async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> 
     Ok(())
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub async fn check_cookie_status(app: tauri::AppHandle, path: String) -> Result<bool, String> {
-    use tauri_plugin_shell::ShellExt;
+pub fn create_ytdlp_command(proxy_url: Option<String>) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("yt-dlp");
+    
+    // Fix PATH for macOS
+    if let Some(path_str) = get_fixed_path() {
+        command.env("PATH", path_str);
+    }
 
+    // Windows no-window creation flag
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    if let Some(p) = proxy_url {
+        if !p.is_empty() {
+             command.arg("--proxy");
+             command.arg(p);
+        }
+    }
+    
+    command
+}
+
+pub fn add_cookie_args(command: &mut tokio::process::Command, source: &str) {
+    if source.starts_with("browser:") {
+        let browser_name = source.trim_start_matches("browser:");
+        if !browser_name.is_empty() {
+             command.arg("--cookies-from-browser");
+             command.arg(browser_name);
+        }
+    } else if std::path::Path::new(source).exists() {
+        command.arg("--cookies");
+        command.arg(source);
+    }
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn check_cookie_status(_app: tauri::AppHandle, pool: State<'_, SqlitePool>, path: String) -> Result<bool, String> {
+    
     if path.is_empty() || path == "none" {
         return Ok(false);
     }
     
-    // Validate path first
-    if !std::path::Path::new(&path).exists() {
+    // Validate path if it's a file
+    if !path.starts_with("browser:") && !std::path::Path::new(&path).exists() {
         return Ok(false);
     }
 
-    let command = match app.shell().sidecar("yt-dlp") {
-        Ok(cmd) => cmd,
-        Err(_e) => {
-             // Sidecar configuration issue or binary missing
-             // eprintln!("Sidecar 'yt-dlp' not configured or missing: {}", e);
-             return Ok(false);
-        }
-    };
+    // Fetch Proxy from DB
+    let proxy_url: Option<String> = sqlx::query_scalar("SELECT proxy_url FROM settings LIMIT 1")
+        .fetch_optional(&*pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .flatten();
+
+    let mut command = create_ytdlp_command(proxy_url);
+    
+    // Use helper to add cookies
+    add_cookie_args(&mut command, &path);
+    
+    let args = vec![
+        "--dump-json".to_string(),
+        "--no-playlist".to_string(),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string()
+    ];
+    
+    // Clear cache to avoid stale bot detection states
+    command.arg("--rm-cache-dir");
     
     let result = command
-        .args(vec![
-            "--cookies".to_string(),
-            path,
-            "--dump-json".to_string(),
-            "--no-playlist".to_string(),
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string()
-        ])
+        .args(args)
         .output()
         .await;
 
     match result {
         Ok(output) => {
+             let stderr = String::from_utf8_lossy(&output.stderr);
+             let stdout = String::from_utf8_lossy(&output.stdout);
+             
              if output.status.success() {
-                 Ok(true)
+                 // Double check for soft indicators of failure in stderr/stdout
+                 if stderr.contains("Sign in to confirm") || stdout.contains("Sign in to confirm") || stderr.contains("bot") {
+                     Ok(false)
+                 } else {
+                     Ok(true)
+                 }
              } else {
                  Ok(false)
              }
         },
-        Err(e) => {
-            // Check for file not found (os error 2)
-            let err_str = e.to_string();
-             if err_str.contains("os error 2") || err_str.contains("No such file") {
-                 // Suppress error for missing binary
-                 Ok(false) 
-             } else {
-                 Err(err_str)
-             }
+        Err(_) => {
+             Ok(false)
         }
     }
 }
@@ -348,6 +393,10 @@ pub async fn refresh_cookies(pool: State<'_, SqlitePool>) -> Result<serde_json::
         return Ok(
             serde_json::json!({ "success": true, "count": 0, "message": "No cookie source configured" }),
         );
+    }
+
+    if source.starts_with("browser:") {
+         return Ok(serde_json::json!({ "success": true, "count": 1, "message": "Using browser cookies" }));
     }
 
     // Check if file
