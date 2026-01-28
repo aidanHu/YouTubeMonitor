@@ -81,7 +81,8 @@ export function VideoList({
                 favorites: filter === 'favorites',
                 search: search_query || null,
                 date_range: date_range,
-                channel_id: channel_id || null
+                channel_id: channel_id || null,
+                min_views: null // Added missing argument
             });
 
             const newVideos = (res.videos || []).map((v: any) => ({
