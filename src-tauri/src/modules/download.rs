@@ -128,6 +128,11 @@ pub async fn download_video(
         .map_err(|e| e.to_string())?;
 
     // Spawn async process
+    #[cfg(not(target_os = "windows"))]
+    {
+        command.process_group(0);
+    }
+
     let mut child = command
         .args(cmd_args)
         .spawn()
@@ -360,8 +365,9 @@ pub async fn cancel_download(
         // We use system command
         #[cfg(not(target_os = "windows"))]
         {
+             // Use negative PID to kill process group
              let _ = app.shell().command("kill")
-                .args(&[pid.to_string()])
+                .args(&["--", &format!("-{}", pid)])
                 .output()
                 .await
                 .map_err(|e| e.to_string())?;
@@ -369,8 +375,9 @@ pub async fn cancel_download(
 
         #[cfg(target_os = "windows")]
         {
+             // Add /T to kill child processes (Tree kill)
              let _ = app.shell().command("taskkill")
-                .args(&["/F", "/PID", &pid.to_string()])
+                .args(&["/F", "/T", "/PID", &pid.to_string()])
                 .output()
                 .await
                 .map_err(|e| e.to_string())?;

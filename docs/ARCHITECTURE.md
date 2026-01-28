@@ -136,3 +136,17 @@
     1.  **事件监听**: 组件挂载时监听 `download-complete` 事件。
     2.  **实时更新**: 收到事件后，立即更新本地 state (`videos`) 和缓存 (`video_cache`) 中的 `local_path` 和 `is_downloaded` 状态。
     3.  **性能优化**: `generateCacheKey` 函数必须使用 `useCallback` 包裹，防止因引用变化导致监听器在每次渲染时反复销毁重建。
+
+### 5.5 外部依赖管理 (External Dependency Management)
+- **机制**: 应用不内置 `yt-dlp` 二进制文件，而是通过 `src-tauri/src/modules/common.rs` 中的 `get_fixed_path` 获取系统环境变量 `PATH`，直接调用用户系统中安装的工具。
+- **优势**:
+    - **轻量化**: 显著减小安装包体积。
+    - **维护性**: 应对 YouTube 反爬策略更新时，用户仅需在终端运行 `yt-dlp -U` 即可升级核心功能，无需等待应用发版。
+
+### 5.6 文件一致性策略 (File Consistency Strategy)
+- **相关文件**: `src/components/VideoCardOverlay.tsx`
+- **机制**: 采用 "Lazy Check" (惰性检查) 策略。
+    - 不在应用启动时进行全盘扫描（避免高 I/O 消耗）。
+    - 仅在用户点击“打开文件夹”时进行检查。
+    - 若捕获到 `ERR_FILE_NOT_FOUND` 错误，前端自动弹出确认框，引导用户一键重新下载。
+- **设计哲学**: 相信数据库记录，但在交互时验证物理文件，并提供闭环的恢复路径。
