@@ -218,7 +218,7 @@ pub async fn activate_software(pool: State<'_, SqlitePool>, code: String) -> Res
 
     // 3. Verify Signature
     // Secret Salt
-    let salt = std::env!("ACTIVATION_SALT");
+    let salt = option_env!("ACTIVATION_SALT").unwrap_or("DEV_SALT_PLACEHOLDER");
 
     use hex;
     use hmac::{Hmac, Mac};

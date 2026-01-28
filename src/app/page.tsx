@@ -40,7 +40,7 @@ export default function Home() {
     } = useData();
 
     // 1. Scroll Restoration Hook
-    const { scrollRef, handle_scroll, scrollToTop } = useScrollRestoration();
+    const { scrollRef, scrollEl, handle_scroll, scrollToTop } = useScrollRestoration();
 
     // 2. Channel Actions Hook
     const {
@@ -365,7 +365,7 @@ export default function Home() {
                                     <ChannelList
                                         channels={filteredChannels}
                                         loading={loading}
-                                        scrollParent={scrollRef.current}
+                                        scrollParent={scrollEl}
                                         onDelete={handle_delete_channel}
                                         onMove={handle_open_move_modal}
                                         onTogglePin={handle_toggle_channel_pin}
@@ -380,14 +380,14 @@ export default function Home() {
                                         search_query={search_query}
                                         date_range={date_range}
                                         channel_id={undefined}
-                                        scrollParent={scrollRef.current}
+                                        scrollParent={scrollEl}
                                     />
                                 ) : active_tab === "favoriteChannels" ? (
                                     <div className="h-full">
                                         <ChannelList
                                             channels={channels.filter(c => c.is_favorite)}
                                             loading={loading}
-                                            scrollParent={scrollRef.current}
+                                            scrollParent={scrollEl}
                                             onDelete={handle_delete_channel}
                                             onMove={handle_open_move_modal}
                                             onTogglePin={handle_toggle_channel_pin}
@@ -403,7 +403,7 @@ export default function Home() {
                                         filter_type={filter_type}
                                         search_query={search_query}
                                         date_range={date_range}
-                                        scrollParent={scrollRef.current}
+                                        scrollParent={scrollEl}
                                     />
                                 ) : active_tab === "analysis" ? (
                                     <AnalysisDashboard

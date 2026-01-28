@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useData } from "@/context/DataContext";
 
 export function useScrollRestoration() {
@@ -9,7 +9,8 @@ export function useScrollRestoration() {
         selected_group_id
     } = useData();
 
-    const scrollRef = useRef<HTMLElement>(null);
+    // Use callback ref to know exactly when DOM is ready
+    const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
     const positionRef = useRef(0);
     const [show_back_to_top, set_show_back_to_top] = useState(false);
 
@@ -18,7 +19,6 @@ export function useScrollRestoration() {
         const scrollTop = e.currentTarget.scrollTop;
         positionRef.current = scrollTop;
 
-        // Show/Hide Back to Top
         if (scrollTop > 300) {
             if (!show_back_to_top) set_show_back_to_top(true);
         } else {
@@ -28,50 +28,41 @@ export function useScrollRestoration() {
 
     // 2. Scroll to Top Helper
     const scrollToTop = () => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+        if (scrollEl) {
+            scrollEl.scrollTo({ top: 0, behavior: 'smooth' });
         }
     };
 
-    // 3. Mount Restore Effect
+    // 3. Unified Restore/Reset Logic
     useEffect(() => {
-        const restoreScroll = () => {
-            const saved = scroll_positions[current_tab];
+        if (!scrollEl) return;
+
+        const saved = scroll_positions[current_tab];
+
+        // Use a small timeout to allow layout (Virtuoso) to settle
+        const timer = setTimeout(() => {
             if (saved && saved > 0) {
-                const container = scrollRef.current;
-                if (!container) return;
-
-                if (container.scrollHeight >= saved) {
-                    container.scrollTop = saved;
+                // Check if scroll is possible
+                if (scrollEl.scrollHeight >= saved) {
+                    scrollEl.scrollTop = saved;
                 } else {
-                    // Retry short loop for dynamic content
-                    let attempts = 0;
-                    const retry = () => {
-                        if (scrollRef.current && scrollRef.current.scrollHeight >= saved) {
-                            scrollRef.current.scrollTop = saved;
-                        } else if (attempts < 10) {
-                            attempts++;
-                            setTimeout(retry, 50);
+                    // One minimal retry for async data
+                    setTimeout(() => {
+                        if (scrollEl.scrollHeight >= saved) {
+                            scrollEl.scrollTop = saved;
                         }
-                    };
-                    retry();
+                    }, 100);
                 }
+            } else {
+                // No saved position? Go to top (for new tab switch)
+                scrollEl.scrollTop = 0;
             }
-        };
-        restoreScroll();
-    }, []); // Run once on mount
+        }, 0);
 
-    // 4. Tab/Group Change Effect - Reset to top
-    const isFirstRun = useRef(true);
-    useEffect(() => {
-        if (isFirstRun.current) {
-            isFirstRun.current = false;
-            return;
-        }
-        scrollToTop();
-    }, [current_tab, selected_group_id]);
+        return () => clearTimeout(timer);
+    }, [current_tab, selected_group_id, scrollEl]); // Run when tab changes or element mounts
 
-    // 5. Save on Unmount/Change
+    // 4. Save on Unmount/Change
     useEffect(() => {
         return () => {
             if (positionRef.current > 0) {
@@ -81,7 +72,8 @@ export function useScrollRestoration() {
     }, [current_tab, set_scroll_position]);
 
     return {
-        scrollRef,
+        scrollRef: setScrollEl, // Pass this to ref={}
+        scrollEl, // Pass this to scrollParent={} (replacing .current)
         handle_scroll,
         scrollToTop,
         show_back_to_top
