@@ -89,8 +89,7 @@ pub fn run() {
                 let client = client_builder.build().expect("Failed to create HTTP client");
                 handle.manage(client);
                 
-                // Start background sync
-                commands::init_background_sync(handle.clone());
+                // Background sync removed
             });
 
             Ok(())

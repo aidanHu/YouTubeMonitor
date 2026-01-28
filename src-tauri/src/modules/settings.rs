@@ -113,7 +113,7 @@ pub fn get_machine_id() -> String {
         let bins = ["/usr/sbin/ioreg", "ioreg"];
         for bin in bins {
             if let Ok(output) = Command::new(bin)
-                .args(&["-rd1", "-c", "IOPlatformExpertDevice"])
+                .args(["-rd1", "-c", "IOPlatformExpertDevice"])
                 .output()
             {
                 let s = String::from_utf8_lossy(&output.stdout);
@@ -254,7 +254,6 @@ pub async fn activate_software(pool: State<'_, SqlitePool>, code: String) -> Res
     }
 }
 
-// Helper function to sync videos for a channel
 pub async fn get_active_api_key(pool: &SqlitePool) -> Result<String, String> {
     let key_row: Option<ApiKey> =
         sqlx::query_as("SELECT * FROM api_keys WHERE is_active = 1 ORDER BY last_used ASC LIMIT 1")
@@ -263,19 +262,11 @@ pub async fn get_active_api_key(pool: &SqlitePool) -> Result<String, String> {
             .map_err(|e| e.to_string())?;
 
     if let Some(api_key) = key_row {
+        // Just update last_used time to keep rotation logic working roughly, 
+        // but DO NOT increment usage here. Usage must be incremented by the caller 
+        // based on actual API cost.
         let now = Utc::now();
-        let last_used = api_key.last_used;
-
-        // Reset if it's a new day
-        let is_new_day = last_used.date_naive() != now.date_naive();
-        let new_usage = if is_new_day {
-            1
-        } else {
-            api_key.usage_today + 1
-        };
-
-        sqlx::query("UPDATE api_keys SET usage_today = ?, last_used = ? WHERE id = ?")
-            .bind(new_usage)
+        sqlx::query("UPDATE api_keys SET last_used = ? WHERE id = ?")
             .bind(now)
             .bind(api_key.id)
             .execute(pool)
@@ -286,4 +277,34 @@ pub async fn get_active_api_key(pool: &SqlitePool) -> Result<String, String> {
     } else {
         Err("No active API key found. Please add a key in settings.".to_string())
     }
+}
+
+pub async fn increment_api_usage(pool: &SqlitePool, key: &str, units: i64) -> Result<(), String> {
+    let api_key: Option<ApiKey> = sqlx::query_as("SELECT * FROM api_keys WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if let Some(api_key) = api_key {
+        let now = Utc::now();
+        let last_used = api_key.last_used;
+
+        // Reset if it's a new day
+        let is_new_day = last_used.date_naive() != now.date_naive();
+        let new_usage = if is_new_day {
+            units
+        } else {
+            api_key.usage_today + units
+        };
+
+        sqlx::query("UPDATE api_keys SET usage_today = ?, last_used = ? WHERE id = ?")
+            .bind(new_usage)
+            .bind(now)
+            .bind(api_key.id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

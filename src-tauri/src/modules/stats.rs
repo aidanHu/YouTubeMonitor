@@ -298,7 +298,7 @@ pub async fn recalculate_all_stats(pool: State<'_, SqlitePool>) -> Result<String
     let mut count = 0;
     for id in channels {
         // Use crate::modules::channel::update_channel_stats
-        if let Err(_e) = crate::modules::channel::update_channel_stats(&mut *tx, &id).await {
+        if let Err(_e) = crate::modules::channel::update_channel_stats(&mut tx, &id).await {
             // Stats update failed for this channel, continue with others
         } else {
             count += 1;

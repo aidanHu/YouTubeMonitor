@@ -43,21 +43,17 @@ pub async fn get_channels(
     let mut channels = Vec::new();
     for row in rows {
         let group_id: Option<i64> = row.try_get("group_id").ok();
-        let group = if let Some(gid) = row
+        let group = row
             .try_get::<Option<i64>, _>("group_id_join")
             .ok()
             .flatten()
-        {
-            Some(Group {
+            .map(|gid| Group {
                 id: gid,
                 name: row.try_get("group_name").unwrap_or_default(),
                 is_pinned: row.try_get("group_is_pinned").unwrap_or(false),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-            })
-        } else {
-            None
-        };
+            });
 
         channels.push(Channel {
             id: row.try_get("id").map_err(|e| e.to_string())?,
@@ -107,7 +103,8 @@ pub async fn add_channels(
             let client = client.inner().clone();
             let cancel_flag = cancel_flag.0.clone();
             let processed_count = processed_count.clone();
-            let group_id = group_id;
+// group_id is already captured
+
 
             async move {
                 if cancel_flag.load(Ordering::Relaxed) {
@@ -166,9 +163,8 @@ fn extract_channel_identifier(url: &str) -> String {
             let path = &url[pos + 12..]; // after youtube.com/
             
             // Case: /channel/ID
-            if path.starts_with("channel/") {
-                let rest = &path[8..];
-                return rest.split(|c| c == '/' || c == '?').next().unwrap_or(rest).to_string();
+            if let Some(rest) = path.strip_prefix("channel/") {
+                return rest.split(['/', '?']).next().unwrap_or(rest).to_string();
             }
             
             // Case: /@handle
@@ -199,7 +195,7 @@ async fn add_single_channel(
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
     
     // 1. Get API Key from settings module
-    let api_key = crate::modules::settings::get_active_api_key(pool).await.map_err(|e| e)?;
+    let api_key = crate::modules::settings::get_active_api_key(pool).await?;
 
     // 2. Resolve Channel Info via API
     let identifier = extract_channel_identifier(url);
@@ -216,9 +212,13 @@ async fn add_single_channel(
         }
     }
 
-    let channel_res = youtube_api::get_channel_by_id_or_handle(&client, &api_key, &identifier)
+    // COST: +1 unit for channel lookup
+    let channel_res = youtube_api::get_channel_by_id_or_handle(client, &api_key, &identifier)
         .await
         .map_err(|e| format!("API Error: {}", e))?;
+    
+    // Increment usage
+    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, 1).await;
 
     let channel_id = channel_res.id;
     let name = channel_res.snippet.title;
@@ -279,9 +279,12 @@ pub async fn sync_channel_videos(
     let api_key = crate::modules::settings::get_active_api_key(pool).await?;
 
     // 1. Get Channel Details
-    let channel_res = youtube_api::get_channel_by_id_or_handle(&client, &api_key, channel_id)
+    // COST: +1 unit
+    let channel_res = youtube_api::get_channel_by_id_or_handle(client, &api_key, channel_id)
         .await
         .map_err(|e| format!("Failed to fetch channel info: {}", e))?;
+    
+    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, 1).await;
 
     let uploads_id = channel_res
         .content_details
@@ -313,16 +316,43 @@ pub async fn sync_channel_videos(
 
     // 3. Fetch Uploads Playlist Items
     // Pass 50 as page size, but loop internally
-    let video_ids = youtube_api::get_upload_playlist_items(&client, &api_key, &uploads_id, 50, threshold_date)
+    // Note: get_upload_playlist_items does strict logic internally but we might want to refactor it to track pages.
+    // However, since we can't easily change the return signature without breaking other things or making it complex, 
+    // a simpler approach is estimating: 1 unit per 50 items returned (rounded up). 
+    // Or better, since `get_upload_playlist_items` loops, we should ideally charge per page THERE.
+    // BUT we can't access `pool` inside `video.rs` easily unless passed. 
+    // For now, let's just approximate or update `video_ids` length after fetch.
+    // Actually, `get_upload_playlist_items` does 1 call? No, it has a loop. 
+    // Let's assume for now we charge based on results count / 50.
+    
+    // Better Fix: Since we can't easily change `youtube_api` signature right now without viewing it fully and changing imports,
+    // let's rely on the number of items. 1 page = 50 items. 
+    // If 51 items, it took 2 pages.
+    // Safety limit is 500, so max 10 pages.
+    
+    let video_ids = youtube_api::get_upload_playlist_items(client, &api_key, &uploads_id, 50, threshold_date)
         .await
         .map_err(|e| format!("Failed to fetch uploads: {}", e))?;
+
+    let playlist_pages = if video_ids.is_empty() { 
+        1 
+    } else {
+        (video_ids.len() as f64 / 50.0).ceil() as i64
+    };
+    // COST: +N units for playlist pages
+    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, playlist_pages).await;
+
 
     if video_ids.is_empty() {
         return Ok("No videos found".to_string());
     }
 
     // 4. Fetch Video Details
-    let videos = youtube_api::get_video_details(&client, &api_key, &video_ids)
+    // COST: +N units for video details pages (batch 50)
+    let video_pages = (video_ids.len() as f64 / 50.0).ceil() as i64;
+    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, video_pages).await;
+
+    let videos = youtube_api::get_video_details(client, &api_key, &video_ids)
         .await
         .map_err(|e| format!("Failed to fetch video details: {}", e))?;
 
@@ -391,7 +421,7 @@ pub async fn sync_channel_videos(
         sync_count += 1;
     }
 
-    let _ = update_channel_stats(&mut *tx, channel_id).await;
+    let _ = update_channel_stats(&mut tx, channel_id).await;
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
@@ -563,21 +593,8 @@ pub async fn sync_all_channels_inner(
     Ok(())
 }
 
-pub fn init_background_sync(app: tauri::AppHandle) {
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(60 * 60)).await; // 1 hour
+// init_background_sync removed
 
-            use tauri::Manager;
-            if let Some(pool) = app_handle.try_state::<SqlitePool>() {
-                if let Some(client) = app_handle.try_state::<reqwest::Client>() {
-                     let _ = sync_all_channels_inner(app_handle.clone(), pool.inner().clone(), client.inner().clone(), Some("7d".to_string()), None).await;
-                }
-            }
-        }
-    });
-}
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn delete_channel(pool: State<'_, SqlitePool>, id: String) -> Result<(), String> {

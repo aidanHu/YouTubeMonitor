@@ -36,7 +36,7 @@ async fn get_backup_data_internal(pool: &SqlitePool) -> Result<BackupData, Strin
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn export_backup(pool: State<'_, SqlitePool>) -> Result<BackupData, String> {
-    get_backup_data_internal(&*pool).await
+    get_backup_data_internal(&pool).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -44,8 +44,8 @@ pub async fn export_backup_to_file(
     pool: State<'_, SqlitePool>,
     path: String,
 ) -> Result<(), String> {
-    let data = get_backup_data_internal(&*pool).await?;
-    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    let backup = get_backup_data_internal(&pool).await?;
+    let json = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(())
 }
