@@ -364,9 +364,9 @@ pub async fn clear_all_data(app: tauri::AppHandle, pool: State<'_, SqlitePool>) 
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn clear_download_history(app: tauri::AppHandle, pool: State<'_, SqlitePool>) -> Result<(), String> {
-    // Reset download flags for all videos that are marked as downloaded
-    // This removes them from download history UI without deleting the video metadata or files
-    sqlx::query("UPDATE videos SET is_downloaded = 0, local_path = NULL, download_status = 'idle', download_error = NULL, downloaded_at = NULL WHERE is_downloaded = 1")
+    // Reset download status for UI cleanup, but PRESERVE is_downloaded and local_path
+    // This allows the "Open Folder" button to persist in the main list
+    sqlx::query("UPDATE videos SET download_status = 'idle', download_error = NULL WHERE download_status IN ('completed', 'error', 'cancelled')")
         .execute(&*pool)
         .await
         .map_err(|e| e.to_string())?;
