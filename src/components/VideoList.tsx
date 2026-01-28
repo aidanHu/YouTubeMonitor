@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { VideoCard } from "@/components/VideoCard";
 import { calculateVPH } from "@/utils/analytics";
 import { LayoutGrid, PlaySquare, Lock } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useData } from "@/context/DataContext";
 import { VirtuosoGrid } from "react-virtuoso";
 import { Video } from "@/types";
@@ -44,9 +44,9 @@ export function VideoList({
     const [page, set_page] = useState(1);
     const [has_more, set_has_more] = useState(true);
 
-    const generateCacheKey = () => {
+    const generateCacheKey = useCallback(() => {
         return JSON.stringify({ group_id, filter, sort_order, filter_type, search_query, date_range, channel_id });
-    };
+    }, [group_id, filter, sort_order, filter_type, search_query, date_range, channel_id]);
 
     const fetch_videos = async (reset = false) => {
         const currentCacheKey = generateCacheKey();
@@ -138,6 +138,55 @@ export function VideoList({
         set_page(1);
         fetch_videos(true);
     }, [sort_order, filter_type, group_id, filter, search_query, date_range, channel_id, useData().last_updated]);
+
+    // Listen for download completion to update local state immediately
+    // This ensures that even if download history is cleared, the "Open Folder" button persists
+    // because the underlying video object now has the correct local_path
+    useEffect(() => {
+        console.log("VideoList: Registering download-complete listener");
+        const unlisten = import('@tauri-apps/api/event').then(api => {
+            return api.listen<any>('download-complete', (event) => {
+                console.log("VideoList: Received download-complete", event.payload);
+                let video_id = "";
+                let path = "";
+
+                if (typeof event.payload === 'string') {
+                    video_id = event.payload;
+                } else {
+                    video_id = event.payload.videoId || event.payload.video_id;
+                    path = event.payload.path;
+                }
+
+                set_videos(prev => prev.map(v => {
+                    if (v.id === video_id) {
+                        console.log("VideoList: Updating video path locally", video_id, path);
+                        return { ...v, local_path: path };
+                    }
+                    return v;
+                }));
+
+                // Also update cache if it exists, matching key
+                const currentKey = generateCacheKey();
+                set_video_cache(prev => {
+                    // Only update cache if key matches, OR update it regardless if it's the same list logic?
+                    // Safer to only update if key matches to avoid polluting other cache keys? 
+                    // Actually video_cache is single object.
+                    if (prev.key === currentKey) {
+                        return {
+                            ...prev,
+                            videos: prev.videos.map(v => v.id === video_id ? { ...v, local_path: path } : v)
+                        };
+                    }
+                    return prev;
+                });
+            });
+        });
+
+        return () => {
+            console.log("VideoList: Unregistering listener");
+            unlisten.then(f => f());
+        };
+    }, [generateCacheKey, set_video_cache]); // Stable dependencies
 
     // Block view if not activated
     if (!is_activated) {

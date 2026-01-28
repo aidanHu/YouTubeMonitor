@@ -106,3 +106,33 @@
 - **CI/CD**: GitHub Actions
 - **构建**: 自动编译 Rust 后端和 Next.js 前端，打包为 `.dmg` (macOS) 或 `.msi` (Windows)。
 - **发布**: 自动创建 GitHub Release 并上传构建产物。
+
+## 5. 关键实现说明 (Critical Implementation Notes)
+本节记录了修复特定 Bug 时的关键实现细节和逻辑决策。**在修改相关功能之前，请务必阅读本文档，以防止再次出现回归问题 (Regression)。**
+
+### 5.1 滚动条位置恢复 (Scroll Restoration)
+- **相关文件**: `src/hooks/useScrollRestoration.ts`, `src/app/page.tsx`
+- **机制**:
+    - **State vs Ref**: 必须使用 `useState` 回调来获取滚动容器的引用，而非 `useRef`。这是因为 React 的 Ref 更新不会触发重新渲染，导致 Effect 可能在 DOM 挂载前执行。
+    - **持久化**: 滚动位置保存在 `DataContext` 全局状态中，而非组件局部状态。
+- **反模式**: 严禁改回 `useRef<HTMLElement>(null)`，这会导致竞态条件。
+
+### 5.2 清空下载历史 (Download History Clearing)
+- **相关文件**: `src-tauri/src/modules/common.rs` (`clear_download_history`)
+- **逻辑**:
+    - **UI 重置**: 仅重置 `download_status = 'idle'` 和 `download_error = NULL`。
+    - **数据保留**: **绝对禁止** 修改 `is_downloaded` 和 `local_path` 字段。
+- **原因**: 用户点击“清空历史”仅意在清除下载任务列表，而非删除物理文件。保留这些字段能确保“打开文件夹”功能继续可用。
+
+### 5.3 视频列表 API 签名 (Video List API Signature)
+- **相关文件**: `src/components/VideoList.tsx` <-> `src-tauri/src/modules/video.rs`
+- **约束**: 前端 `invoke('get_videos', ...)` 的参数列表必须与后端 Rust 函数签名 **完全一致**。Rust 是强类型语言，参数缺失或类型不匹配会导致静默失败。
+- **注意**: 新增参数时（如 `min_views`），必须同时更新前后端。
+
+### 5.4 视频列表状态同步 (Video List State Sync)
+- **相关文件**: `src/components/VideoList.tsx`
+- **问题**: 下载完成后，如果不刷新列表，`video.local_path` 仍为 `null`。此时若用户“清空历史”，UI 会因为缺少路径而回退到“下载”按钮。
+- **解决方案**:
+    1.  **事件监听**: 组件挂载时监听 `download-complete` 事件。
+    2.  **实时更新**: 收到事件后，立即更新本地 state (`videos`) 和缓存 (`video_cache`) 中的 `local_path` 和 `is_downloaded` 状态。
+    3.  **性能优化**: `generateCacheKey` 函数必须使用 `useCallback` 包裹，防止因引用变化导致监听器在每次渲染时反复销毁重建。
