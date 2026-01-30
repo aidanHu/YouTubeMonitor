@@ -385,7 +385,7 @@ export default function Home() {
                                 ) : active_tab === "favoriteChannels" ? (
                                     <div className="h-full">
                                         <ChannelList
-                                            channels={channels.filter(c => c.is_favorite)}
+                                            channels={filteredChannels.filter(c => c.is_favorite)}
                                             loading={loading}
                                             scrollParent={scrollEl}
                                             onDelete={handle_delete_channel}
@@ -398,7 +398,7 @@ export default function Home() {
                                 ) : active_tab === "favoriteVideos" ? (
                                     <VideoList
                                         filter="favorites"
-                                        group_id={null}
+                                        group_id={selected_group_id}
                                         sort_order={sort_order as any}
                                         filter_type={filter_type}
                                         search_query={search_query}

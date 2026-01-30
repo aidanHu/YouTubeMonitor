@@ -193,11 +193,12 @@ pub async fn get_upload_playlist_items(
     playlist_id: &str,
     max_results: u32,
     after: Option<DateTime<Utc>>,
-) -> Result<Vec<String>, Box<dyn Error>> {
+) -> Result<(Vec<String>, i64), Box<dyn Error>> {
     let mut video_ids = Vec::new();
     let mut next_page_token: Option<String> = None;
     let mut has_more = true;
     let mut total_fetched = 0;
+    let mut api_calls = 0;
     // Safety limit to prevent infinite loops or huge quota usage
     let safeguard_limit = 500; 
 
@@ -213,6 +214,7 @@ pub async fn get_upload_playlist_items(
             url.push_str(&format!("&pageToken={}", token));
         }
 
+        api_calls += 1;
         let resp = client.get(&url).send().await?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -258,24 +260,26 @@ pub async fn get_upload_playlist_items(
         }
     }
     
-    Ok(video_ids)
+    Ok((video_ids, api_calls))
 }
 
 pub async fn get_video_details(
     client: &Client,
     api_key: &str,
     video_ids: &[String],
-) -> Result<Vec<VideoResource>, Box<dyn Error>> {
+) -> Result<(Vec<VideoResource>, i64), Box<dyn Error>> {
     if video_ids.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
 
     let mut all_items = Vec::new();
+    let mut api_calls = 0;
 
     for chunk in video_ids.chunks(50) {
         let ids_str = chunk.join(",");
         let url = format!("https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id={}&key={}", ids_str, api_key);
 
+        api_calls += 1;
         let resp = client.get(&url).send().await?;
         let text = resp.text().await?;
         let list: VideoListResponse = serde_json::from_str(&text).map_err(|e| {
@@ -290,7 +294,7 @@ pub async fn get_video_details(
         }
     }
 
-    Ok(all_items)
+    Ok((all_items, api_calls))
 }
 
 pub fn parse_duration_to_seconds(iso_duration: &str) -> i64 {

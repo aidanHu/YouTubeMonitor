@@ -299,13 +299,32 @@ pub async fn get_active_api_key(pool: &SqlitePool, excluded_keys: &[String]) -> 
         // Just update last_used time to keep rotation logic working roughly, 
         // but DO NOT increment usage here. Usage must be incremented by the caller 
         // based on actual API cost.
+        // Check for New Day (PST) logic here
         let now = Utc::now();
-        sqlx::query("UPDATE api_keys SET last_used = ? WHERE id = ?")
-            .bind(now)
-            .bind(api_key.id)
-            .execute(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        let last_used = api_key.last_used;
+        
+        use chrono::Duration;
+        let now_pst = now - Duration::hours(8);
+        let last_used_pst = last_used - Duration::hours(8);
+        let is_new_day = last_used_pst.date_naive() != now_pst.date_naive();
+        
+        if is_new_day {
+             // Reset usage and quota status
+             sqlx::query("UPDATE api_keys SET last_used = ?, usage_today = 0, is_quota_exhausted = 0, last_error = NULL WHERE id = ?")
+                .bind(now)
+                .bind(api_key.id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        } else {
+             // Just touch last_used
+             sqlx::query("UPDATE api_keys SET last_used = ? WHERE id = ?")
+                .bind(now)
+                .bind(api_key.id)
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
 
         Ok(api_key.key)
     } else {
@@ -318,38 +337,15 @@ pub async fn get_active_api_key(pool: &SqlitePool, excluded_keys: &[String]) -> 
 }
 
 pub async fn increment_api_usage(pool: &SqlitePool, key: &str, units: i64) -> Result<(), String> {
-    let api_key: Option<ApiKey> = sqlx::query_as("SELECT * FROM api_keys WHERE key = ?")
+    // Atomic increment
+    let now = Utc::now();
+    sqlx::query("UPDATE api_keys SET usage_today = usage_today + ?, last_used = ? WHERE key = ?")
+        .bind(units)
+        .bind(now)
         .bind(key)
-        .fetch_optional(pool)
+        .execute(pool)
         .await
         .map_err(|e| e.to_string())?;
-
-    if let Some(api_key) = api_key {
-        let now = Utc::now();
-        let last_used = api_key.last_used;
-
-        // Reset if it's a new day (Align with Pacific Time midnight)
-        // Shift both times by -8 hours (approx PST) to check date change
-        use chrono::Duration;
-        let now_pst = now - Duration::hours(8);
-        let last_used_pst = last_used - Duration::hours(8);
-
-        let is_new_day = last_used_pst.date_naive() != now_pst.date_naive();
-        let new_usage = if is_new_day {
-            units // Reset to just the current increment
-        } else {
-            api_key.usage_today + units
-        };
-
-        // Also reset quota exhausted status since it's working now/new day
-        sqlx::query("UPDATE api_keys SET usage_today = ?, last_used = ?, is_quota_exhausted = 0, last_error = NULL WHERE id = ?")
-            .bind(new_usage)
-            .bind(now)
-            .bind(api_key.id)
-            .execute(pool)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
     Ok(())
 }
 

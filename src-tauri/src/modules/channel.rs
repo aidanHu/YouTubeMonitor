@@ -358,9 +358,9 @@ pub async fn sync_channel_videos(
 
         // 3. Fetch Uploads Playlist Items
         // Pass 50 as page size, but loop internally
-        let (video_ids_opt, err_str_opt) = match youtube_api::get_upload_playlist_items(client, &api_key, &uploads_id, 50, threshold_date).await {
-            Ok(ids) => (Some(ids), None),
-            Err(e) => (None, Some(e.to_string())),
+        let (video_ids_opt, api_calls_opt, err_str_opt) = match youtube_api::get_upload_playlist_items(client, &api_key, &uploads_id, 50, threshold_date).await {
+            Ok((ids, calls)) => (Some(ids), Some(calls), None),
+            Err(e) => (None, None, Some(e.to_string())),
         };
 
         if let Some(err_str) = err_str_opt {
@@ -372,14 +372,10 @@ pub async fn sync_channel_videos(
              return Err(format!("Failed to fetch uploads: {}", err_str));
         }
         let video_ids = video_ids_opt.unwrap();
+        let playlist_api_calls = api_calls_opt.unwrap();
 
-        let playlist_pages = if video_ids.is_empty() { 
-            1 
-        } else {
-            (video_ids.len() as f64 / 50.0).ceil() as i64
-        };
-        // COST: +N units for playlist pages
-        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, playlist_pages).await;
+        // COST: Use exact API calls returned
+        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, playlist_api_calls).await;
 
 
         if video_ids.is_empty() {
@@ -388,12 +384,10 @@ pub async fn sync_channel_videos(
 
         // 4. Fetch Video Details
         // COST: +N units for video details pages (batch 50)
-        let video_pages = (video_ids.len() as f64 / 50.0).ceil() as i64;
-        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, video_pages).await;
 
-        let (videos_opt, err_str_opt) = match youtube_api::get_video_details(client, &api_key, &video_ids).await {
-            Ok(v) => (Some(v), None),
-            Err(e) => (None, Some(e.to_string())),
+        let (videos_opt, api_calls_opt, err_str_opt) = match youtube_api::get_video_details(client, &api_key, &video_ids).await {
+            Ok((v, calls)) => (Some(v), Some(calls), None),
+            Err(e) => (None, None, Some(e.to_string())),
         };
 
         if let Some(err_str) = err_str_opt {
@@ -405,6 +399,10 @@ pub async fn sync_channel_videos(
              return Err(format!("Failed to fetch video details: {}", err_str));
         }
         let videos = videos_opt.unwrap();
+        let video_api_calls = api_calls_opt.unwrap();
+        
+        // COST: Use exact API calls returned
+        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, video_api_calls).await;
 
         // 5. Start Transaction for DB updates
         let mut tx = match pool.begin().await {

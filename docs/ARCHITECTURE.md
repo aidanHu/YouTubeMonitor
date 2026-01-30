@@ -176,3 +176,13 @@
         - **逻辑层恢复**: 每次 `increment_api_usage` 增加用量时，也会基于 UTC-8 时间检测是否新的一天，若是则重置数据库字段。
     - **可视化**: 前端使用橙色背景、Badge 标签和 Tooltip 清晰展示哪些 Key 已被系统暂时熔断，以及具体的错误原因（如 Daily Limit Exceeded），消除用户对“未知错误”的困惑。
 - **设计哲学**: 通过透明化的状态反馈，让用户对“隐形”的后台重试机制有感知，增强系统可信度。
+
+### 5.9 API 配额精准计算与原子重置 (Exact API Quota & Atomic Reset) (2026-01-30)
+- **相关文件**: `src-tauri/src/modules/channel.rs`, `src-tauri/src/youtube_api.rs`, `src-tauri/src/modules/settings.rs`
+- **精准计算 (Exact Accounting)**:
+    - **背景**: 早期版本根据返回数据量估算 API 消耗页数，但在数据过滤等边界条件下存在误差。
+    - **改进**: 重构底层 API 模块，使其直接返回**实际发出的 HTTP 请求次数 (Cost)**。业务层不再估算，而是根据底层反馈的真实 Cost 进行扣减。
+    - **标准**: 符合 Google 官方计费标准（list 操作 = 1 unit）。
+- **原子重置 (Atomic Reset)**:
+    - **Bug修复**: 修复了 `get_active_api_key` 和 `increment_api_usage` 之间的竞态条件。
+    - **逻辑**: 将“跨天重置”逻辑上移至 Key 获取阶段；配额增加采用原子 SQL (`usage_today = usage_today + N`)，杜绝了并发下的计数丢失和重置失效问题。
