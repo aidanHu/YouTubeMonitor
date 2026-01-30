@@ -136,7 +136,7 @@ pub struct VideoStatistics {
 
 #[derive(Debug, Deserialize)]
 pub struct VideoContentDetails {
-    pub duration: String, // ISO 8601, e.g. PT1M30S
+    pub duration: Option<String>, // ISO 8601, e.g. PT1M30S
 }
 
 // --- Functions ---

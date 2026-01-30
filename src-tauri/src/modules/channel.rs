@@ -434,7 +434,7 @@ pub async fn sync_channel_videos(
                 }
             }
 
-            let duration_iso = video.content_details.as_ref().map(|d| d.duration.as_str()).unwrap_or("PT0S");
+            let duration_iso = video.content_details.as_ref().and_then(|d| d.duration.as_deref()).unwrap_or("PT0S");
             let seconds = youtube_api::parse_duration_to_seconds(duration_iso);
             let is_short = seconds <= 60; 
 
