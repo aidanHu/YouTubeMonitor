@@ -194,80 +194,104 @@ async fn add_single_channel(
     group_id: Option<i64>,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
     
-    // 1. Get API Key from settings module
-    let api_key = crate::modules::settings::get_active_api_key(pool).await?;
+    let mut excluded_keys = Vec::new();
+    
+    loop {
+         // 1. Get API Key from settings module
+        let api_key_res = crate::modules::settings::get_active_api_key(pool, &excluded_keys).await;
+        
+        let api_key = match api_key_res {
+            Ok(k) => k,
+            Err(e) => return Err(format!("Add channel failed: {}", e).into()),
+        };
 
-    // 2. Resolve Channel Info via API
-    let identifier = extract_channel_identifier(url);
+        // 2. Resolve Channel Info via API
+        let identifier = extract_channel_identifier(url);
 
-    // Optimization: Check if channel exists in DB first if we have a Channel ID (UC...)
-    if identifier.starts_with("UC") {
+        // Optimization: Check if channel exists in DB first if we have a Channel ID (UC...)
+        if identifier.starts_with("UC") {
+            let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM channels WHERE id = ?")
+                .bind(&identifier)
+                .fetch_optional(pool)
+                .await?;
+
+            if exists.is_some() {
+                return Err("Channel already exists (Found locally)".into());
+            }
+        }
+
+        // COST: +1 unit for channel lookup
+        let (channel_res_opt, err_str_opt) = match youtube_api::get_channel_by_id_or_handle(client, &api_key, &identifier).await {
+            Ok(res) => (Some(res), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+
+        if let Some(err_str) = err_str_opt {
+             if err_str.contains("quota") || err_str.contains("403") {
+                  // Mark as exhausted
+                  let _ = crate::modules::settings::mark_api_key_exhausted(pool, &api_key, &err_str).await;
+                  // Rotate key
+                  excluded_keys.push(api_key);
+                  continue;
+             } else {
+                 return Err(format!("API Error: {}", err_str).into());
+             }
+        }
+
+        let channel_res = channel_res_opt.unwrap();
+
+        // Increment usage
+        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, 1).await;
+
+        let channel_id = channel_res.id;
+        let name = channel_res.snippet.title;
+        let thumbnail = channel_res.snippet.thumbnails.get_best_url();
+
+        // Parse stats
+        let sub_count = channel_res
+            .statistics.as_ref().and_then(|s| s.subscriber_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let view_count = channel_res
+            .statistics.as_ref().and_then(|s| s.view_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let video_count = channel_res
+            .statistics.as_ref().and_then(|s| s.video_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+
+        // 3. Insert into DB
+        let now = Utc::now();
+
+        // Check exist
         let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM channels WHERE id = ?")
-            .bind(&identifier)
+            .bind(&channel_id)
             .fetch_optional(pool)
             .await?;
 
         if exists.is_some() {
-            return Err("Channel already exists (Found locally)".into());
+            return Err("Channel already exists".into());
         }
+
+        let _ = sqlx::query("INSERT INTO channels (id, url, name, thumbnail, subscriber_count, view_count, video_count, group_id, is_favorite, is_pinned, created_at, last_upload_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(&channel_id)
+            .bind(format!("https://www.youtube.com/channel/{}", channel_id))
+            .bind(&name)
+            .bind(thumbnail)
+            .bind(sub_count)
+            .bind(view_count)
+            .bind(video_count)
+            .bind(group_id)
+            .bind(false)
+            .bind(false)
+            .bind(now)
+            .bind(Option::<DateTime<Utc>>::None)
+            .execute(pool)
+            .await?;
+
+        // 4. Sync recent videos
+        if let Err(_e) = sync_channel_videos(pool, client, &channel_id, Some("now-30days".to_string())).await
+        {
+            // Ignore error
+        }
+
+        return Ok((name, channel_id));
     }
-
-    // COST: +1 unit for channel lookup
-    let channel_res = youtube_api::get_channel_by_id_or_handle(client, &api_key, &identifier)
-        .await
-        .map_err(|e| format!("API Error: {}", e))?;
-    
-    // Increment usage
-    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, 1).await;
-
-    let channel_id = channel_res.id;
-    let name = channel_res.snippet.title;
-    let thumbnail = channel_res.snippet.thumbnails.get_best_url();
-
-    // Parse stats
-    let sub_count = channel_res
-        .statistics.as_ref().and_then(|s| s.subscriber_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-    let view_count = channel_res
-        .statistics.as_ref().and_then(|s| s.view_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-    let video_count = channel_res
-        .statistics.as_ref().and_then(|s| s.video_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-
-    // 3. Insert into DB
-    let now = Utc::now();
-
-    // Check exist
-    let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM channels WHERE id = ?")
-        .bind(&channel_id)
-        .fetch_optional(pool)
-        .await?;
-
-    if exists.is_some() {
-        return Err("Channel already exists".into());
-    }
-
-    let _ = sqlx::query("INSERT INTO channels (id, url, name, thumbnail, subscriber_count, view_count, video_count, group_id, is_favorite, is_pinned, created_at, last_upload_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(&channel_id)
-        .bind(format!("https://www.youtube.com/channel/{}", channel_id))
-        .bind(&name)
-        .bind(thumbnail)
-        .bind(sub_count)
-        .bind(view_count)
-        .bind(video_count)
-        .bind(group_id)
-        .bind(false)
-        .bind(false)
-        .bind(now)
-        .bind(Option::<DateTime<Utc>>::None)
-        .execute(pool)
-        .await?;
-
-    // 4. Sync recent videos
-    if let Err(_e) = sync_channel_videos(pool, client, &channel_id, Some("now-30days".to_string())).await
-    {
-        // Ignore error
-    }
-
-    Ok((name, channel_id))
 }
 
 pub async fn sync_channel_videos(
@@ -276,156 +300,188 @@ pub async fn sync_channel_videos(
     channel_id: &str,
     date_range: Option<String>,
 ) -> Result<String, String> {
-    let api_key = crate::modules::settings::get_active_api_key(pool).await?;
+    let mut excluded_keys = Vec::new();
 
-    // 1. Get Channel Details
-    // COST: +1 unit
-    let channel_res = youtube_api::get_channel_by_id_or_handle(client, &api_key, channel_id)
-        .await
-        .map_err(|e| format!("Failed to fetch channel info: {}", e))?;
-    
-    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, 1).await;
+    loop {
+        let api_key_res = crate::modules::settings::get_active_api_key(pool, &excluded_keys).await;
+        let api_key = match api_key_res {
+            Ok(k) => k,
+            Err(e) => return Err(e),
+        };
 
-    let uploads_id = channel_res
-        .content_details
-        .ok_or("Channel has no content details")?
-        .related_playlists
-        .uploads;
+        // 1. Get Channel Details
+        // COST: +1 unit
+        let (channel_res_opt, err_str_opt) = match youtube_api::get_channel_by_id_or_handle(client, &api_key, channel_id).await {
+            Ok(res) => (Some(res), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
 
-    // 2. Determine Date Threshold
-    let threshold_date = match date_range.as_deref() {
-        Some("all") => None,
-        Some(s) if s.starts_with("now-") => {
-            let part = &s[4..]; // remove "now-"
-            let now = Utc::now();
-            if part.ends_with("days") {
-                 let num = part.trim_end_matches("days").parse::<i64>().unwrap_or(7);
-                 Some(now - Duration::days(num))
-            } else if part.ends_with("months") {
-                 let num = part.trim_end_matches("months").parse::<i64>().unwrap_or(1);
-                 Some(now - Duration::days(num * 30))
-            } else if part.ends_with("year") {
-                 let num = part.trim_end_matches("year").parse::<i64>().unwrap_or(1);
-                 Some(now - Duration::days(num * 365))
-            } else {
-                 Some(now - Duration::days(7))
-            }
-        },
-        _ => Some(Utc::now() - Duration::days(7)), // Default fallback
-    };
-
-    // 3. Fetch Uploads Playlist Items
-    // Pass 50 as page size, but loop internally
-    // Note: get_upload_playlist_items does strict logic internally but we might want to refactor it to track pages.
-    // However, since we can't easily change the return signature without breaking other things or making it complex, 
-    // a simpler approach is estimating: 1 unit per 50 items returned (rounded up). 
-    // Or better, since `get_upload_playlist_items` loops, we should ideally charge per page THERE.
-    // BUT we can't access `pool` inside `video.rs` easily unless passed. 
-    // For now, let's just approximate or update `video_ids` length after fetch.
-    // Actually, `get_upload_playlist_items` does 1 call? No, it has a loop. 
-    // Let's assume for now we charge based on results count / 50.
-    
-    // Better Fix: Since we can't easily change `youtube_api` signature right now without viewing it fully and changing imports,
-    // let's rely on the number of items. 1 page = 50 items. 
-    // If 51 items, it took 2 pages.
-    // Safety limit is 500, so max 10 pages.
-    
-    let video_ids = youtube_api::get_upload_playlist_items(client, &api_key, &uploads_id, 50, threshold_date)
-        .await
-        .map_err(|e| format!("Failed to fetch uploads: {}", e))?;
-
-    let playlist_pages = if video_ids.is_empty() { 
-        1 
-    } else {
-        (video_ids.len() as f64 / 50.0).ceil() as i64
-    };
-    // COST: +N units for playlist pages
-    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, playlist_pages).await;
-
-
-    if video_ids.is_empty() {
-        return Ok("No videos found".to_string());
-    }
-
-    // 4. Fetch Video Details
-    // COST: +N units for video details pages (batch 50)
-    let video_pages = (video_ids.len() as f64 / 50.0).ceil() as i64;
-    let _ = crate::modules::settings::increment_api_usage(pool, &api_key, video_pages).await;
-
-    let videos = youtube_api::get_video_details(client, &api_key, &video_ids)
-        .await
-        .map_err(|e| format!("Failed to fetch video details: {}", e))?;
-
-    // 5. Start Transaction for DB updates
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-
-    // Update Channel Stats
-    if let Some(stats) = channel_res.statistics {
-        let sub_count = stats.subscriber_count.unwrap_or_default().parse::<i64>().unwrap_or(0);
-        let view_count = stats.view_count.unwrap_or_default().parse::<i64>().unwrap_or(0);
-        let video_count = stats.video_count.unwrap_or_default().parse::<i64>().unwrap_or(0);
-
-        let _ = sqlx::query("UPDATE channels SET subscriber_count = ?, view_count = ?, video_count = ? WHERE id = ?")
-            .bind(sub_count)
-            .bind(view_count)
-            .bind(video_count)
-            .bind(channel_id)
-            .execute(&mut *tx)
-            .await;
-    }
-
-    let mut sync_count = 0;
-
-    for video in videos {
-        if let Some(threshold) = threshold_date {
-            if video.snippet.published_at < threshold {
-                continue;
-            }
+        if let Some(err_str) = err_str_opt {
+             if err_str.contains("quota") || err_str.contains("403") {
+                  let _ = crate::modules::settings::mark_api_key_exhausted(pool, &api_key, &err_str).await;
+                  excluded_keys.push(api_key);
+                  continue;
+             }
+             return Err(format!("Failed to fetch channel info: {}", err_str));
         }
 
-        let duration_iso = video.content_details.as_ref().map(|d| d.duration.as_str()).unwrap_or("PT0S");
-        let seconds = youtube_api::parse_duration_to_seconds(duration_iso);
-        let is_short = seconds <= 60; 
+        let channel_res = channel_res_opt.unwrap();
+        
+        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, 1).await;
 
-        let thumb = video.snippet.thumbnails.get_best_url();
-        let view_count = video.statistics.as_ref().and_then(|s| s.view_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-        let like_count = video.statistics.as_ref().and_then(|s| s.like_count.as_ref()).and_then(|v| v.parse::<i64>().ok());
-        let comment_count = video.statistics.as_ref().and_then(|s| s.comment_count.as_ref()).and_then(|v| v.parse::<i64>().ok());
+        let uploads_id = match channel_res.content_details {
+            Some(cd) => cd.related_playlists.uploads,
+            None => return Err("Channel has no content details".to_string()),
+        };
 
-        let url = format!("https://www.youtube.com/watch?v={}", video.id);
+        // 2. Determine Date Threshold
+        let threshold_date = match date_range.as_deref() {
+            Some("all") => None,
+            Some(s) if s.starts_with("now-") => {
+                let part = &s[4..]; // remove "now-"
+                let now = Utc::now();
+                if part.ends_with("days") {
+                    let num = part.trim_end_matches("days").parse::<i64>().unwrap_or(7);
+                    Some(now - Duration::days(num))
+                } else if part.ends_with("months") {
+                    let num = part.trim_end_matches("months").parse::<i64>().unwrap_or(1);
+                    Some(now - Duration::days(num * 30))
+                } else if part.ends_with("year") {
+                    let num = part.trim_end_matches("year").parse::<i64>().unwrap_or(1);
+                    Some(now - Duration::days(num * 365))
+                } else {
+                    Some(now - Duration::days(7))
+                }
+            },
+            _ => Some(Utc::now() - Duration::days(7)), // Default fallback
+        };
 
-        let _ = sqlx::query("INSERT INTO videos (id, title, url, thumbnail, published_at, view_count, like_count, comment_count, is_short, channel_id, created_at, updated_at, is_favorite) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET 
-            title=excluded.title, 
-            view_count=excluded.view_count, 
-            like_count=excluded.like_count,
-            comment_count=excluded.comment_count,
-            updated_at=excluded.updated_at")
-            .bind(&video.id)
-            .bind(&video.snippet.title)
-            .bind(url)
-            .bind(thumb)
-            .bind(video.snippet.published_at)
-            .bind(view_count)
-            .bind(like_count)
-            .bind(comment_count)
-            .bind(is_short)
-            .bind(&video.snippet.channel_id)
-            .bind(Utc::now())
-            .bind(Utc::now())
-            .bind(false)
-            .execute(&mut *tx)
-            .await;
+        // 3. Fetch Uploads Playlist Items
+        // Pass 50 as page size, but loop internally
+        let (video_ids_opt, err_str_opt) = match youtube_api::get_upload_playlist_items(client, &api_key, &uploads_id, 50, threshold_date).await {
+            Ok(ids) => (Some(ids), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
 
-        sync_count += 1;
+        if let Some(err_str) = err_str_opt {
+             if err_str.contains("quota") || err_str.contains("403") {
+                  let _ = crate::modules::settings::mark_api_key_exhausted(pool, &api_key, &err_str).await;
+                  excluded_keys.push(api_key);
+                  continue;
+             }
+             return Err(format!("Failed to fetch uploads: {}", err_str));
+        }
+        let video_ids = video_ids_opt.unwrap();
+
+        let playlist_pages = if video_ids.is_empty() { 
+            1 
+        } else {
+            (video_ids.len() as f64 / 50.0).ceil() as i64
+        };
+        // COST: +N units for playlist pages
+        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, playlist_pages).await;
+
+
+        if video_ids.is_empty() {
+            return Ok("No videos found".to_string());
+        }
+
+        // 4. Fetch Video Details
+        // COST: +N units for video details pages (batch 50)
+        let video_pages = (video_ids.len() as f64 / 50.0).ceil() as i64;
+        let _ = crate::modules::settings::increment_api_usage(pool, &api_key, video_pages).await;
+
+        let (videos_opt, err_str_opt) = match youtube_api::get_video_details(client, &api_key, &video_ids).await {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+
+        if let Some(err_str) = err_str_opt {
+             if err_str.contains("quota") || err_str.contains("403") {
+                  let _ = crate::modules::settings::mark_api_key_exhausted(pool, &api_key, &err_str).await;
+                  excluded_keys.push(api_key);
+                  continue;
+             }
+             return Err(format!("Failed to fetch video details: {}", err_str));
+        }
+        let videos = videos_opt.unwrap();
+
+        // 5. Start Transaction for DB updates
+        let mut tx = match pool.begin().await {
+            Ok(t) => t,
+            Err(e) => return Err(e.to_string()),
+        };
+
+        // Update Channel Stats
+        if let Some(stats) = channel_res.statistics {
+            let sub_count = stats.subscriber_count.unwrap_or_default().parse::<i64>().unwrap_or(0);
+            let view_count = stats.view_count.unwrap_or_default().parse::<i64>().unwrap_or(0);
+            let video_count = stats.video_count.unwrap_or_default().parse::<i64>().unwrap_or(0);
+
+            let _ = sqlx::query("UPDATE channels SET subscriber_count = ?, view_count = ?, video_count = ? WHERE id = ?")
+                .bind(sub_count)
+                .bind(view_count)
+                .bind(video_count)
+                .bind(channel_id)
+                .execute(&mut *tx)
+                .await;
+        }
+
+        let mut sync_count = 0;
+
+        for video in videos {
+            if let Some(threshold) = threshold_date {
+                if video.snippet.published_at < threshold {
+                    continue;
+                }
+            }
+
+            let duration_iso = video.content_details.as_ref().map(|d| d.duration.as_str()).unwrap_or("PT0S");
+            let seconds = youtube_api::parse_duration_to_seconds(duration_iso);
+            let is_short = seconds <= 60; 
+
+            let thumb = video.snippet.thumbnails.get_best_url();
+            let view_count = video.statistics.as_ref().and_then(|s| s.view_count.as_ref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+            let like_count = video.statistics.as_ref().and_then(|s| s.like_count.as_ref()).and_then(|v| v.parse::<i64>().ok());
+            let comment_count = video.statistics.as_ref().and_then(|s| s.comment_count.as_ref()).and_then(|v| v.parse::<i64>().ok());
+
+            let url = format!("https://www.youtube.com/watch?v={}", video.id);
+
+            let _ = sqlx::query("INSERT INTO videos (id, title, url, thumbnail, published_at, view_count, like_count, comment_count, is_short, channel_id, created_at, updated_at, is_favorite) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET 
+                title=excluded.title, 
+                view_count=excluded.view_count, 
+                like_count=excluded.like_count,
+                comment_count=excluded.comment_count,
+                updated_at=excluded.updated_at")
+                .bind(&video.id)
+                .bind(&video.snippet.title)
+                .bind(url)
+                .bind(thumb)
+                .bind(video.snippet.published_at)
+                .bind(view_count)
+                .bind(like_count)
+                .bind(comment_count)
+                .bind(is_short)
+                .bind(&video.snippet.channel_id)
+                .bind(Utc::now())
+                .bind(Utc::now())
+                .bind(false)
+                .execute(&mut *tx)
+                .await;
+
+            sync_count += 1;
+        }
+
+        let _ = update_channel_stats(&mut tx, channel_id).await;
+
+        if let Err(e) = tx.commit().await {
+            return Err(e.to_string());
+        }
+
+        return Ok(format!("Synced {} videos via API", sync_count));
     }
-
-    let _ = update_channel_stats(&mut tx, channel_id).await;
-
-    tx.commit().await.map_err(|e| e.to_string())?;
-
-    Ok(format!("Synced {} videos via API", sync_count))
 }
 
 pub async fn update_channel_stats(

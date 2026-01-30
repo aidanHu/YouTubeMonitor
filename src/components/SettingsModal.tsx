@@ -56,6 +56,8 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
         key: string;
         name: string | null;
         is_active: boolean;
+        is_quota_exhausted: boolean;
+        last_error: string | null;
         usage_today: number;
         last_used: string;
         created_at: string;
@@ -67,6 +69,37 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
     const [is_adding_key, set_is_adding_key] = useState(false);
     const [editingKeyId, set_editing_key_id] = useState<number | null>(null);
     const [editNameBuffer, set_edit_name_buffer] = useState("");
+    const [resetCountdown, setCountdown] = useState("");
+
+    useEffect(() => {
+        const updateCountdown = () => {
+            const now = new Date();
+            // Get current time in Pacific Time
+            const ptString = now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" });
+            const ptDate = new Date(ptString);
+
+            // Calculate next midnight in PT
+            const nextMidnight = new Date(ptDate);
+            nextMidnight.setHours(24, 0, 0, 0);
+
+            const diff = nextMidnight.getTime() - ptDate.getTime();
+
+            // Auto refresh when countdown hits zero or goes negative (reset time)
+            if (diff <= 1000) {
+                fetch_api_keys();
+            }
+
+            const hours = Math.floor(diff / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+            setCountdown(`${hours}h ${minutes}m`);
+        };
+
+        updateCountdown(); // Call immediately
+        const timer = setInterval(updateCountdown, 60000); // Update every minute is enough for h/m
+
+        return () => clearInterval(timer);
+    }, []);
 
     const fetch_api_keys = async () => {
         set_loading_keys(true);
@@ -507,7 +540,22 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
                     {active_tab === "api" && (
                         <div className="space-y-6">
                             <div className="flex justify-between items-center">
-                                <h3 className="text-lg font-bold text-zinc-800 dark:text-zinc-200">API Keys 管理</h3>
+                                <div className="flex flex-col gap-1">
+                                    <h3 className="text-lg font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                                        API Keys 管理
+                                        <button
+                                            onClick={fetch_api_keys}
+                                            className={`p-1.5 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all ${loadingKeys ? 'animate-spin text-blue-500' : 'text-zinc-400'}`}
+                                            title="刷新用量"
+                                        >
+                                            <RefreshCw size={14} />
+                                        </button>
+                                    </h3>
+                                    <p className="text-xs text-zinc-500 flex items-center gap-1">
+                                        <Info size={10} />
+                                        配额重置倒计时 (PT): {resetCountdown || "计算中..."}
+                                    </p>
+                                </div>
                                 <button
                                     onClick={() => set_is_adding_key(true)}
                                     className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
@@ -556,7 +604,7 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
 
                             <div className="space-y-3">
                                 {apiKeys.map(key => (
-                                    <div key={key.id} className={`p-4 rounded-xl border ${key.is_active ? 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900' : 'border-red-200 bg-red-50 dark:bg-red-900/10'} transition-all flex flex-col md:flex-row gap-4 items-start md:items-center justify-between group`}>
+                                    <div key={key.id} className={`p-4 rounded-xl border ${key.is_active ? (key.is_quota_exhausted ? 'border-orange-200 bg-orange-50 dark:bg-orange-900/10' : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900') : 'border-red-200 bg-red-50 dark:bg-red-900/10'} transition-all flex flex-col md:flex-row gap-4 items-start md:items-center justify-between group`}>
                                         <div className="flex-1 min-w-0 md:flex flex-col gap-1">
                                             <div className="flex items-center gap-2">
                                                 {editingKeyId === key.id ? (
@@ -584,6 +632,12 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
                                                     </>
                                                 )}
                                                 {!key.is_active && <span className="px-1.5 py-0.5 bg-red-100 text-red-600 text-[10px] font-bold rounded uppercase">Disabled</span>}
+                                                {key.is_active && key.is_quota_exhausted && (
+                                                    <span className="flex items-center gap-1 px-1.5 py-0.5 bg-orange-100 text-orange-600 text-[10px] font-bold rounded uppercase" title={key.last_error || "Quota Exceeded"}>
+                                                        <Info size={10} />
+                                                        Quota Exhausted
+                                                    </span>
+                                                )}
                                             </div>
                                             <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono">
                                                 <Key size={12} />
@@ -600,6 +654,11 @@ export function SettingsModal({ is_open, on_close }: SettingsModalProps) {
                                                 <span className="mx-1">•</span>
                                                 <span className="text-blue-600 dark:text-blue-400 font-bold" title="Today's Usage">今日使用: {key.usage_today} 次</span>
                                             </div>
+                                            {key.is_active && key.is_quota_exhausted && key.last_error && (
+                                                <div className="mt-1 text-[10px] text-orange-600 dark:text-orange-400 truncate max-w-md" title={key.last_error}>
+                                                    Error: {key.last_error}
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="flex items-center gap-2 self-end md:self-auto">

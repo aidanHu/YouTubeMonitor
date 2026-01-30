@@ -150,3 +150,29 @@
     - 仅在用户点击“打开文件夹”时进行检查。
     - 若捕获到 `ERR_FILE_NOT_FOUND` 错误，前端自动弹出确认框，引导用户一键重新下载。
 - **设计哲学**: 相信数据库记录，但在交互时验证物理文件，并提供闭环的恢复路径。
+
+### 5.7 API 多密钥轮询与自动故障转移 (2026-01-30)
+- **相关文件**: `src-tauri/src/modules/settings.rs` (Key 获取), `src-tauri/src/modules/channel.rs` (业务重试)
+- **机制**:
+    - **自动轮询 (Load Balancing)**:
+        - 利用 SQL 查询 `ORDER BY last_used ASC LIMIT 1` 实现 Least Recently Used (LRU) 策略。
+        - 每次请求都会优先使用最久未使用的 Key，从而在多个 Key 之间均匀分摊请求量。
+    - **故障转移 (Failover)**:
+        - 在 `sync_channel_videos` 和 `add_single_channel` 中也实现了重试循环 (Retry Loop)。
+        - 当捕获到 `quota` 或 `403` 错误时，当前 Key 会被加入**临时排除列表**。
+        - 循环会自动向 `settings` 模块请求一个新的、不在排除列表中的 Key。
+        - 该过程会持续直到操作成功或所有 Key 都耗尽。
+- **目的**: 确保在高频同步场景下，即使单个 Key 达到配额上限，系统也能无缝切换到备用 Key 继续工作，最大化利用所有可用配额。
+
+### 5.8 API Key 状态反馈与可视化 (API Key Status Feedback)
+- **相关变更**:
+    - **数据库**: `api_keys` 表新增 `is_quota_exhausted` (BOOL) 和 `last_error` (TEXT) 字段。
+    - **前端**: `SettingsModal.tsx` 更新 UI 渲染逻辑。
+- **机制**:
+    - **自动标记**: 当 Key 在轮询重试中遭遇配额 Exhausted 错误时，后端立即将其标记为 `is_quota_exhausted = 1` 并记录错误信息。
+    - **自动恢复**: 
+        - **显示层恢复**: 前端倒计时归零时（太平洋时间午夜），自动触发刷新请求。
+        - **数据层恢复**: 后端 `get_api_keys` 接口读取时，会根据 **UTC-8 (PST)** 时间判断是否跨天。若已跨天，手动将返回数据中的 `usage_today` 重置为 0，`is_quota_exhausted` 重置为 false，即便数据库尚未写入。这确保用户看到的永远是当天的即时状态。
+        - **逻辑层恢复**: 每次 `increment_api_usage` 增加用量时，也会基于 UTC-8 时间检测是否新的一天，若是则重置数据库字段。
+    - **可视化**: 前端使用橙色背景、Badge 标签和 Tooltip 清晰展示哪些 Key 已被系统暂时熔断，以及具体的错误原因（如 Daily Limit Exceeded），消除用户对“未知错误”的困惑。
+- **设计哲学**: 通过透明化的状态反馈，让用户对“隐形”的后台重试机制有感知，增强系统可信度。

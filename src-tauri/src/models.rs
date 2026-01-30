@@ -342,6 +342,8 @@ pub struct ApiKey {
     pub key: String,
     pub name: Option<String>,
     pub is_active: bool,
+    pub is_quota_exhausted: bool,
+    pub last_error: Option<String>,
     pub usage_today: i64,
     pub last_used: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
